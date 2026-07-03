@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# Estate CodeRabbit standard (#270 §3.7 — OpenSSF Scorecard Code-Review control).
+# CodeRabbit is the automated PR reviewer on these solo/small-team repos: it advises,
+# it never gates merges (request_changes_workflow: false) and it never edits code.
+# Branch protection does NOT require its approval — a solo repo stays self-mergeable.
+# "AI empfiehlt, Mensch entscheidet."
+#
+# INERT until the CodeRabbit GitHub App is installed on this repo's org (an org-admin
+# web-UI action, cannot be done from the CLI — tracked as the TQ-CODERABBIT-APP user-gate).
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main

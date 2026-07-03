@@ -1,0 +1,14 @@
+# Keeps GitHub Actions references current (#270 §3.3 — OpenSSF Scorecard
+# Dependency-Update-Tool). Once merged, Dependabot maintains the SHA pins added
+# in this PR by proposing version bumps as reviewable PRs.
+#
+# Only the github-actions ecosystem is declared here. The Python dependencies are
+# managed with uv (pyproject.toml + uv.lock); Dependabot's uv support is still
+# nascent, so the pip/uv ecosystem is deferred to the owner rather than opening
+# potentially-broken lockfile PRs from a cross-repo hardening sweep.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
