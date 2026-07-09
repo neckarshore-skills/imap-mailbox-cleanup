@@ -36,3 +36,135 @@ jobs:
 
       - name: Run tests (Docker IMAP starts as part of fixture)
         run: uv run pytest -v
+
+  # Estate stats.json producer (test-scope facet, backlog #394 / Phase-3 breadth rollout).
+  # Publishes a contract-conformant stats.json to the UNPROTECTED `stats-data` branch on every
+  # push:main, AFTER the `test` gate. Runs even when `test` fails (if: always) so a non-green run
+  # emits red:true — never a stale-green count. contents:write is scoped to THIS job only;
+  # publishing to stats-data (not main) keeps main's branch protection fully intact — no bypass
+  # actor, no weakened required check. main is public + protected (enforce_admins + required `test`
+  # check); a bot push to main is correctly rejected, so the machine artifact lives on its own
+  # unprotected single-file branch instead (Approach E, trustscope precedent PR #63).
+  #
+  # Counts come from pytest's OWN reporter (never grep), split by folder into two disjoint totals:
+  #   unit        → pytest --collect-only over tests/ minus tests/integration/
+  #   integration → pytest --collect-only over tests/integration/ (the live-Greenmail multi-account suite)
+  # --collect-only imports the modules but never invokes the session-scoped greenmail fixture, so no
+  # Docker starts here — enumeration is cheap and container-free. The pass/fail comes from the `test`
+  # gate's real result (needs.test.result), which DID run the full Docker suite.
+  # Contract: https://github.com/neckarshore-ai/neckarshore-planning/blob/main/docs/reference/stats-json-contract.md
+  emit-stats:
+    name: Emit stats.json (estate producer)
+    needs: test
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      # Serialize emits so two rapid pushes cannot race on the git push to stats-data.
+      group: emit-stats-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      # Default persist-credentials (true) — the publish step pushes stats.json to the UNPROTECTED
+      # stats-data branch via the job's contents:write GITHUB_TOKEN (github-actions[bot]).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3.2.4
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # Enumerate the two disjoint suites for their counts. --collect-only never starts Docker
+      # (fixtures are lazy). `|| true` keeps a collection hiccup from masking the count line; the
+      # pytest handler fails-closed if it cannot find "N tests collected".
+      - name: Capture unit reporter (pytest --collect-only, container-free)
+        run: uv run pytest --collect-only -q --ignore=tests/integration tests > /tmp/unit.out 2>&1 || true
+
+      - name: Capture integration reporter (pytest --collect-only)
+        run: uv run pytest --collect-only -q tests/integration > /tmp/int.out 2>&1 || true
+
+      # Pass/fail comes from the gate job's real result (it ran the full Docker suite), never from
+      # untrusted event text — no injection surface.
+      - name: Compute test result from the gate
+        id: result
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          if [ "$TEST_RESULT" = "success" ]; then
+            echo "value=success" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=failure" >> "$GITHUB_OUTPUT"
+            echo "detail=test suite: $TEST_RESULT" >> "$GITHUB_OUTPUT"
+          fi
+
+      # SHA-pinned (third-party actions are never tag-floated). 54ae407 is the PIR-passed pin.
+      - name: Emit stats.json
+        uses: neckarshore-ai/test-stats-action@54ae407769bdfea6b8fed2672f0ceefa5ef2588a
+        with:
+          repo: ${{ github.repository }}
+          out: stats.json
+          sha: ${{ github.sha }}
+          test_result: ${{ steps.result.outputs.value }}
+          red_detail: ${{ steps.result.outputs.detail }}
+          runners: |
+            unit:pytest:/tmp/unit.out
+            integration:pytest:/tmp/int.out
+
+      # Structural contract gate — invariants that hold on BOTH green and red runs. Deliberately
+      # does NOT assert a golden total (a red run legitimately undercounts and must still emit red:true).
+      - name: Validate emitted stats.json against the contract
+        run: |
+          jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .repo == $repo
+            and (.audited_sha | type == "string" and length > 0)
+            and (.tests.total == ([.tests.byType[]] | add))
+            and (.tests.byType | has("unit") and has("integration"))
+            and (.red | type == "boolean")
+          ' stats.json > /dev/null \
+            || { echo "::error::stats.json failed contract validation"; cat stats.json; exit 1; }
+          echo "stats.json is contract-valid:"; cat stats.json
+
+      # Publish to the UNPROTECTED stats-data branch via git PLUMBING (hash-object → mktree →
+      # commit-tree → push), NOT a working-tree checkout. stats-data is an orphan single-file branch
+      # sharing no history with main, so `git checkout stats-data` would abort (git refuses to
+      # overwrite the working tree). Plumbing writes one blob + one tree + one commit to the object
+      # DB and pushes the ref, never switching branches. The tree is exactly {stats.json}; the commit
+      # chains onto the previous stats-data tip or starts a fresh root (first run). The orphan branch
+      # carries NO workflow files, so a push to it triggers no CI — the re-emit loop is structurally
+      # impossible. Diff-guard on everything except updatedAt so a same-sha re-run causes no churn.
+      - name: Publish stats.json to the stats-data branch when it changed
+        env:
+          GIT_AUTHOR_NAME: "github-actions[bot]"
+          GIT_AUTHOR_EMAIL: "github-actions[bot]@users.noreply.github.com"
+          GIT_COMMITTER_NAME: "github-actions[bot]"
+          GIT_COMMITTER_EMAIL: "github-actions[bot]@users.noreply.github.com"
+        run: |
+          set -euo pipefail
+          norm() { jq -S 'del(.updatedAt)' "$1" 2>/dev/null; }
+          git fetch origin +refs/heads/stats-data:refs/remotes/origin/stats-data 2>/dev/null || true
+          if git show origin/stats-data:stats.json > /tmp/prev-stats.json 2>/dev/null \
+             && [ "$(norm /tmp/prev-stats.json)" = "$(norm stats.json)" ]; then
+            echo "stats.json unchanged (ignoring timestamp) — nothing to publish."
+            exit 0
+          fi
+          BLOB=$(git hash-object -w stats.json)
+          TREE=$(printf '100644 blob %s\tstats.json\n' "$BLOB" | git mktree)
+          MSG="chore(stats): emit stats.json @ ${GITHUB_SHA:0:7}"
+          if git rev-parse --verify origin/stats-data >/dev/null 2>&1; then
+            COMMIT=$(git commit-tree "$TREE" -p origin/stats-data -m "$MSG")
+          else
+            COMMIT=$(git commit-tree "$TREE" -m "$MSG")
+          fi
+          # Belt: an empty source refspec (":refs/heads/stats-data") is a DELETE, not a no-op — an
+          # empty $COMMIT would delete stats-data. set -e already aborts on a failed commit-tree; this
+          # is the explicit guard so a branch deletion can never depend on implicit -e.
+          [ -n "$COMMIT" ] || { echo "::error::commit-tree produced no commit — refusing to push (would delete stats-data)"; exit 1; }
+          git push origin "${COMMIT}:refs/heads/stats-data"

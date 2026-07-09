@@ -348,6 +348,10 @@ uv run ruff format --check .
 
 CI runs the same on every push. Greenmail starts on port 3143 (plain IMAP) + 3025 (SMTP).
 
+## Estate test-scope stats
+
+This repo is a **producer** for the neckarshore.ai estate test-count. On every `push:main`, CI counts the two gated pytest suites (unit + the live-Greenmail integration suite) from pytest's own `--collect-only` reporter — never grep — and publishes a contract-valid `stats.json` to the dedicated [`stats-data`](../../tree/stats-data/stats.json) branch: a single-file data branch, **not** `main`. `main` is a protected branch (a bot cannot push to it without weakening its protection), so the machine artifact lives on its own unprotected branch instead. The neckarshore.ai aggregator fetches it via `contents/stats.json?ref=stats-data`. Contract: [`stats-json-contract.md`](https://github.com/neckarshore-ai/neckarshore-planning/blob/main/docs/reference/stats-json-contract.md).
+
 ## Limitations (v0.2)
 
 1. IONOS only — no provider abstraction (Gmail API, Office365 = v0.3+)
