@@ -17,8 +17,19 @@ Two points worth distinguishing:
 **Credentials stay on your machine.** The tool reads IMAP host, username, and
 password from your local environment/config. Credentials are used only to open
 the IMAP connection you configured; they are never logged, transmitted to any
-third party, or committed. Verify with `grep -rn 'requests\|http\|urllib' src/`
-— the only network egress is the IMAP connection you point it at.
+third party, or committed.
+
+**Network egress.** Two kinds of outbound connection exist: (1) the IMAP (and,
+for `mailto:` unsubscribe, SMTP) server you configure; (2) when you run
+`unsubscribe`, an HTTP(S) request to the `List-Unsubscribe` URL published by the
+sender. That URL is **email-controlled**, so the outbound request is gated by a
+fail-closed SSRF guard (`validate_egress_url` in `operations/unsubscribe.py`):
+non-`http(s)` schemes and any host resolving to a private / loopback /
+link-local / reserved range (e.g. `127.0.0.1`, `169.254.169.254` cloud metadata,
+RFC-1918) are refused before any request is sent, all resolved addresses are
+checked (DNS-rebinding safe), and HTTP redirects are disabled so a permitted host
+cannot bounce the request onto an internal target. No IMAP/SMTP credentials are
+ever attached to that unsubscribe request.
 
 **No telemetry.** No analytics, error reporting, or auto-update calls are made.
 
@@ -29,8 +40,10 @@ mailbox you give it credentials for.
 ## Scope
 
 The tool operates only on the IMAP account and folders you configure. It does not
-read the local filesystem beyond its own config, and makes no outbound calls other
-than to the IMAP server you specify.
+read the local filesystem beyond its own config. Its only outbound calls are to
+the IMAP/SMTP server you specify and — during `unsubscribe` — to the sender's
+`List-Unsubscribe` URL, which is guarded against SSRF as described under
+**Data Handling → Network egress** above.
 
 ## Reporting a Vulnerability
 
