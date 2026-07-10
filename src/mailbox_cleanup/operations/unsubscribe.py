@@ -1,15 +1,76 @@
 """Parse and execute List-Unsubscribe per RFC 2369 / RFC 8058."""
 
+import ipaddress
 import re
 import smtplib
+import socket
 from dataclasses import dataclass
 from email.message import EmailMessage
+from urllib.parse import urlparse
 
 import requests
 
 from .filters import build_imap_search
 
 _LINK_RE = re.compile(r"<([^>]+)>")
+
+_ALLOWED_SCHEMES = ("http", "https")
+
+
+class EgressBlocked(Exception):
+    """Raised when an email-derived outbound target is refused by the SSRF guard."""
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Deny loopback, private, link-local, reserved, multicast and unspecified ranges.
+
+    Covers the classic SSRF targets: 127.0.0.0/8, 10/172.16/192.168 RFC-1918,
+    169.254.0.0/16 (incl. the 169.254.169.254 cloud-metadata endpoint), etc.
+    IPv4-mapped IPv6 (::ffff:127.0.0.1) is unwrapped before the check.
+    """
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def validate_egress_url(url: str) -> None:
+    """Fail-closed SSRF guard for email-controlled URLs.
+
+    Policy: **scheme + IP-range denylist** (NOT a host allowlist — legitimate
+    unsubscribe endpoints live on arbitrary sender domains). Refuses:
+      - any scheme other than http/https,
+      - a missing host,
+      - a host that resolves (via DNS) to a private/loopback/link-local/
+        reserved/multicast/unspecified address. ALL resolved addresses are
+        checked, so a domain that rebinds to an internal IP is still refused.
+
+    Raises ``EgressBlocked`` on refusal; returns ``None`` when the target is
+    permitted. Callers must still disable HTTP redirects to close the
+    redirect-to-internal bypass.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise EgressBlocked(f"scheme not allowed: {parsed.scheme!r}")
+    host = parsed.hostname
+    if not host:
+        raise EgressBlocked(f"missing host in target: {url!r}")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise EgressBlocked(f"DNS resolution failed for {host!r}: {e}") from e
+    if not infos:
+        raise EgressBlocked(f"no addresses resolved for {host!r}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if _is_blocked_ip(ip):
+            raise EgressBlocked(f"host {host!r} resolves to non-routable address {ip}")
 
 
 @dataclass
@@ -50,16 +111,25 @@ def perform_unsubscribe(
     timeout: float = 15.0,
 ) -> tuple[bool, str]:
     if action.kind == "https":
+        # SSRF guard: refuse email-controlled URLs pointing at internal ranges
+        # or non-http(s) schemes BEFORE any outbound request is made.
         try:
+            validate_egress_url(action.target)
+        except EgressBlocked as e:
+            return False, f"blocked by egress guard: {e}"
+        try:
+            # allow_redirects=False closes the redirect-to-internal bypass:
+            # a permitted public host cannot 30x us onto 169.254.169.254 etc.
             if action.one_click:
                 resp = requests.post(
                     action.target,
                     data="List-Unsubscribe=One-Click",
                     headers={"Content-Type": "application/x-www-form-urlencoded"},
                     timeout=timeout,
+                    allow_redirects=False,
                 )
             else:
-                resp = requests.get(action.target, timeout=timeout)
+                resp = requests.get(action.target, timeout=timeout, allow_redirects=False)
             return resp.status_code < 400, f"HTTP {resp.status_code}"
         except Exception as e:
             return False, f"HTTPS error: {e}"
