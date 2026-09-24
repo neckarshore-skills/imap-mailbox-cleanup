@@ -7,6 +7,7 @@ from mailbox_cleanup.manage.frontmatter import split_frontmatter
 from mailbox_cleanup.manage.sources import (
     MarkdownFolderSource,
     SourceMissingError,
+    SourcesConfigError,
     load_sources,
     sources_path,
 )
@@ -75,3 +76,37 @@ def test_missing_sources_file_means_no_sources():
 
 def test_tests_never_see_the_real_sources_file():
     assert sources_path() != Path.home() / ".mailbox-cleanup" / "sources.json"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"schema_version": 1, "folders": "/somewhere/vault"}',
+        '{"schema_version": 1, "folders": [""]}',
+        '{"schema_version": 1, "folders": ["relative/path"]}',
+        '{"schema_version": 1, "folders": [1]}',
+        '{"schema_version": 1, "folders": null}',
+        '["/a"]',
+        "{not json",
+    ],
+)
+def test_malformed_sources_file_is_rejected_loudly(tmp_path, monkeypatch, content):
+    """A string instead of a list used to be iterated per character, so "/" became a source
+    that would scan the whole disk. Anything but a list of absolute paths is refused."""
+    f = tmp_path / "sources.json"
+    f.write_text(content, encoding="utf-8")
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(f))
+    with pytest.raises(SourcesConfigError, match="sources.json"):
+        load_sources()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"---\nextends: [unclosed\n---\nbody\n", b"---\nextends: generic\n---\n\xff\xfe bad\n"],
+)
+def test_unreadable_overlay_file_is_named_not_crashed(tmp_path, raw):
+    """One broken note must not escape as a raw YAML or Unicode error: it surfaces as a
+    SourceMissingError (which Task 9 reports and skips) naming the file."""
+    (tmp_path / "bad.md").write_bytes(raw)
+    with pytest.raises(SourceMissingError, match="bad.md"):
+        MarkdownFolderSource(tmp_path).overlays()
