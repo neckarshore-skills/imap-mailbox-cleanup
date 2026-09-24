@@ -19,5 +19,5 @@ jobs:
           LEAK_GUARD_PRIVATE_LIST: ${{ secrets.LEAK_GUARD_PRIVATE_LIST }}
           BASE_REF: ${{ github.base_ref }}
         run: |
-          git diff -U0 --no-color --diff-filter=ACMR "origin/${BASE_REF}...HEAD" > /tmp/pr.diff
+          git diff -U0 --no-color --text --diff-filter=ACMRT "origin/${BASE_REF}...HEAD" > /tmp/pr.diff
           python3 scripts/leak_guard.py --diff /tmp/pr.diff
