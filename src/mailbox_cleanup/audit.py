@@ -2,7 +2,7 @@
 
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -36,6 +36,35 @@ def log_action(
         "args": dict(args),
         "folder": folder,
         "affected_uids": list(affected_uids),
+        "result": result,
+    }
+    if error is not None:
+        record["error"] = error
+    path = _audit_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def log_manage_action(
+    *,
+    subcommand: str,
+    account: str,
+    folder: str,
+    uids: Sequence[str],
+    result: str,
+    arg_keys: Iterable[str] = (),
+    error: str | None = None,
+) -> None:
+    """Manage-layer record (spec §5): argument KEYS only, never values, because
+    search values are names and topics."""
+    record: dict[str, object] = {
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "subcommand": subcommand,
+        "account": account,
+        "arg_keys": sorted(arg_keys),
+        "folder": folder,
+        "affected_uids": list(uids),
         "result": result,
     }
     if error is not None:
