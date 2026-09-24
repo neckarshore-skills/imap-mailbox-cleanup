@@ -265,3 +265,21 @@ def test_parse_scheme_is_case_insensitive(header, kind):
     the mail and reports success while the sender stays subscribed (Review Focus 1)."""
     actions = parse_list_unsubscribe(list_unsubscribe=header, list_unsubscribe_post=None)
     assert [a.kind for a in actions] == [kind]
+
+
+def test_apply_failed_https_text_output_reports_failure(monkeypatch):
+    monkeypatch.setattr(cli_mod, "perform_unsubscribe", lambda a: (False, "HTTP 500"))
+    out, _, audit = _run_apply(
+        monkeypatch,
+        [{"kind": "https", "target": "https://example.com/u", "one_click": True}],
+        flags=("--apply",),
+    )
+    assert "Performed" not in out
+    assert "FAILED" in out and "HTTP 500" in out
+    assert [a["result"] for a in audit] == ["partial"]
+
+
+def test_dry_run_mailto_only_text_output_does_not_promise_an_attempt(monkeypatch):
+    out, _, _ = _run_apply(monkeypatch, MAILTO_ONLY, flags=())
+    assert "Would attempt" not in out
+    assert "unsub@example.com" in out

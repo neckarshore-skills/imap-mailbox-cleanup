@@ -850,6 +850,10 @@ def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
         counts = f"{len(actions)} action(s) found, {len(uids)} matching messages"
         if apply and manual:
             click.echo(f"No unsubscribe performed for {sender}, all mail kept: {counts}")
+        elif apply and results and not results[0]["ok"]:
+            click.echo(f"Unsubscribe FAILED for {sender} ({results[0]['info']}): {counts}")
+        elif manual:
+            click.echo(f"No automatic unsubscribe available for {sender}: {counts}")
         else:
             verb = "Performed" if apply else "Would attempt"
             click.echo(f"{verb} unsubscribe for {sender}: {counts}")
