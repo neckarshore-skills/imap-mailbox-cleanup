@@ -10,7 +10,7 @@
 
 **Spec:** [`docs/2026-09-24-mailbox-autopilot-design.md`](2026-09-24-mailbox-autopilot-design.md). Read it before any task. Section references below (§N) point into it.
 
-**Pre-check (MASCHIN, 2026-09-24):** the code in Tasks 1, 2, 4, 6–10 was extracted from this document and its unit tests run against it: 55 tests green (leak guard, hook, envelope, read/draft helpers, sources incl. the config-rewrite case, playbooks, drafts resolver). Not run: every GreenMail integration test, the CLI tests, and Task 3. Those are measured for the first time by the builder.
+**Pre-check (MASCHIN, 2026-09-24):** all code in this document was assembled onto a copy of `main` and run without Docker: `ruff check` and `ruff format --check` (after Global Constraint 9), and the full suite with `SKIP_DOCKER_TESTS=1`. Not run: every test that needs GreenMail (Docker was not running), so Task 1's measurement and all `tests/integration/` results are first measured by the builder.
 
 **Builder:** Obi. **Acceptance:** Sensei (product manager). **Merge:** the Founder, until the leak guard (Task 2) is live and an AD-61 revision allows otherwise. Obi never merges his own PR.
 
@@ -24,6 +24,7 @@
 6. **Do NOT rename these** (renaming them locks the owner out or breaks the running skill): `auth.SERVICE_NAME = "mailbox-cleanup"` (Keychain entries), the `~/.mailbox-cleanup/` directory, every `MAILBOX_CLEANUP_*` environment variable, the Python module `mailbox_cleanup`, and the CLI JSON `"schema_version": 1`.
 7. One task, one branch (`obi/<date>-<slug>`), one PR. PR bodies for Task 2 and Task 3 carry the Completion rule 7 line: what was corrupted, and that the gate went red.
 8. A mail-derived string reaching the agent is always inside the `<mail-content>` envelope (Task 4) — bodies, subjects, sender names, addresses.
+9. **Snippets are compact, and some are additions to existing files.** When a step says "Add to `<existing file>`", merge the snippet's imports into that file's import block and drop duplicates (ruff E402, F811, I001). Run `uv run ruff format .` before every commit; CI's `ruff format --check` is the gate. (Measured 2026-09-24: the assembled plan code passes `ruff check` only after this merge.)
 
 ## Review Focus
 
@@ -212,7 +213,9 @@ Built second so that every later PR passes through it (§6). The repository and 
 - Create: `tests/test_leak_guard.py`
 
 **Interfaces:**
-- Produces: `scan_files(paths: list[Path], private_patterns: list[str], allow: list[AllowEntry]) -> list[Hit]`; `Hit(path: str, line: int, kind: str, label: str)`; CLI `python scripts/leak_guard.py <files...>` reading the private list from env `LEAK_GUARD_PRIVATE_LIST` (newline-separated regexes; empty or unset = skipped). Exit 1 on any hit.
+- Produces: `added_lines(diff_text: str) -> list[tuple[str, int, str]]` (path, line number, text of every added line in a `git diff -U0`); `scan_lines(entries, private_patterns: list[str], allow: list[AllowEntry]) -> list[Hit]`; `scan_files(paths, private_patterns, allow) -> list[Hit]` (whole files, for the local full-tree run); `Hit(path: str, line: int, kind: str, label: str)`. CLI: `python scripts/leak_guard.py --diff <file>` (CI) or `python scripts/leak_guard.py <files...>` (whole files). Private list from env `LEAK_GUARD_PRIVATE_LIST` (one regex per line; empty or unset = skipped). Exit 1 on any hit.
+
+**Why added lines, not whole files (measured 2026-09-24):** a whole-file scan of today's tree gives 341 public-pattern hits in 30 files, mostly May test fixtures with real-looking domains (`b.de`, `x.de`) and the owner's own domain in tests and docs. A whole-file gate would block nearly every later PR that touches a test. The gate's job is to keep **new** leaks out; legacy content is handled once, in Step 6.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -222,6 +225,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _SPEC = importlib.util.spec_from_file_location(
     "leak_guard", Path(__file__).parent.parent / "scripts" / "leak_guard.py"
 )
@@ -230,38 +235,41 @@ sys.modules["leak_guard"] = lg  # dataclasses need the module registered
 _SPEC.loader.exec_module(lg)
 
 
-def _write(tmp_path, name, text):
-    p = tmp_path / name
-    p.write_text(text, encoding="utf-8")
-    return p
+def _scan(text, private=(), allow=(), path="a.py"):
+    entries = [(path, n, line) for n, line in enumerate(text.splitlines(), start=1)]
+    return lg.scan_lines(entries, list(private), list(allow))
 
 
-def test_example_domains_pass(tmp_path):
-    p = _write(tmp_path, "a.py", "x = 'anna@example.com'\ny = 'bot@example.org'\nz = 'test@localhost'\nw = '<a@x.example>'\n")
-    assert lg.scan_files([p], [], []) == []
+def test_example_domains_and_non_addresses_pass():
+    text = (
+        "x = 'anna@example.com'\n"
+        "y = 'bot@example.org'\n"
+        "z = 'test@localhost'\n"
+        "w = '<a@x.example>'\n"
+        "- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n"
+        "t = 'u@x'\n"
+        "/plugin install mailbox-autopilot@neckarshore-ai\n"
+    )
+    assert _scan(text) == []
 
 
-def test_real_looking_address_hits(tmp_path):
-    p = _write(tmp_path, "a.py", "x = 'jane.doe@some-company.test'\n")
-    hits = lg.scan_files([p], [], [])
+def test_real_looking_address_hits():
+    hits = _scan("x = 'jane.doe@some-company.test'\n")
     assert [(h.line, h.kind, h.label) for h in hits] == [(1, "public", "email")]
 
 
-def test_valid_iban_hits_invalid_does_not(tmp_path):
-    p = _write(tmp_path, "a.md", "ok DE89 3704 0044 0532 0130 00\nnot DE00 1234 5678 9012 3456 78\n")
-    hits = lg.scan_files([p], [], [])
+def test_valid_iban_hits_invalid_does_not():
+    hits = _scan("ok DE89 3704 0044 0532 0130 00\nnot DE00 1234 5678 9012 3456 78\n")
     assert [(h.line, h.label) for h in hits] == [(1, "iban")]
 
 
-def test_international_phone_hits(tmp_path):
-    p = _write(tmp_path, "a.md", "call +49 711 1234567 now\nversion 1.2.3456789\n")
-    hits = lg.scan_files([p], [], [])
+def test_international_phone_hits():
+    hits = _scan("call +49 711 1234567 now\nversion 1.2.3456789\n")
     assert [(h.line, h.label) for h in hits] == [(1, "phone")]
 
 
-def test_private_hit_never_reveals_pattern_or_text(tmp_path, capsys):
-    p = _write(tmp_path, "a.md", "hello Zwergenhausen\n")
-    hits = lg.scan_files([p], [r"zwergenhausen"], [])
+def test_private_hit_never_reveals_pattern_or_text(capsys):
+    hits = _scan("hello Zwergenhausen\n", private=[r"zwergenhausen"], path="a.md")
     assert [(h.kind, h.label) for h in hits] == [("private", "private-list hit")]
     lg.report(hits)
     out = capsys.readouterr().out
@@ -269,20 +277,35 @@ def test_private_hit_never_reveals_pattern_or_text(tmp_path, capsys):
     assert "wergenhausen" not in out.lower()
 
 
-def test_allowlist_exempts_with_reason(tmp_path):
-    p = _write(tmp_path, "pyproject.toml", 'authors = [{name = "X", email = "x@owner.test"}]\n')
-    allow = lg.parse_allow('pyproject.toml:^authors = # package metadata author line\n')
-    assert lg.scan_files([p], [], allow) == []
+def test_allowlist_exempts_with_reason():
+    allow = lg.parse_allow("pyproject.toml:^authors = # package metadata author line\n")
+    line = 'authors = [{name = "X", email = "x@owner.test"}]\n'
+    assert _scan(line, allow=allow, path="pyproject.toml") == []
 
 
 def test_allowlist_entry_without_reason_is_rejected():
-    import pytest
-
     with pytest.raises(ValueError):
         lg.parse_allow("pyproject.toml:^authors = \n")
 
 
-def test_binary_file_skipped(tmp_path):
+def test_added_lines_parses_unified_zero_context_diff():
+    diff = (
+        "diff --git a/n.md b/n.md\n"
+        "--- a/n.md\n"
+        "+++ b/n.md\n"
+        "@@ -3,0 +4,2 @@\n"
+        "+first\n"
+        "+second\n"
+        "diff --git a/gone.md b/gone.md\n"
+        "--- a/gone.md\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-removed\n"
+    )
+    assert lg.added_lines(diff) == [("n.md", 4, "first"), ("n.md", 5, "second")]
+
+
+def test_scan_files_skips_binary(tmp_path):
     p = tmp_path / "img.png"
     p.write_bytes(b"\x89PNG\x00\x00jane@some-company.test")
     assert lg.scan_files([p], [], []) == []
@@ -295,7 +318,11 @@ Expected: FAIL (`scripts/leak_guard.py` does not exist).
 
 ```python
 # scripts/leak_guard.py
-"""Leak guard for a public repository (spec §6). Not shipped in the package."""
+"""Leak guard for a public repository (spec §6). Not shipped in the package.
+
+CI mode scans only the lines a pull request ADDS (`--diff`); file mode scans whole files
+and is used for the one-time local run over the full tree.
+"""
 
 from __future__ import annotations
 
@@ -305,10 +332,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-ALLOWED_EMAIL_DOMAINS = ("example.com", "example.org", "example.net", "example", "localhost")  # RFC 2606
-EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)")
+# RFC 2606 reserved names plus localhost; subdomains of these are allowed too
+ALLOWED_EMAIL_DOMAINS = ("example.com", "example.org", "example.net", "example", "localhost")
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}|localhost)\b")
 IBAN_RE = re.compile(r"\b([A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?)\b")
-PHONE_RE = re.compile(r"(?<![\w.])(?:\+|00)\d{1,3}[ /-]?\(?\d{2,5}\)?[ /-]?\d{3,}(?:[ /-]?\d+)*")
+PHONE_RE = re.compile(
+    r"(?<![\w.])(?:\+|00)\d{1,3}"  # + or 00, country code
+    r"[ /-]?\(?\d{2,5}\)?[ /-]?\d{3,}(?:[ /-]?\d+)*"  # area code, number
+)
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 @dataclass(frozen=True)
@@ -340,51 +372,77 @@ def parse_allow(text: str) -> list[AllowEntry]:
     return entries
 
 
+def added_lines(diff_text: str) -> list[tuple[str, int, str]]:
+    """(path, new line number, text) for every '+' line of a `git diff -U0`."""
+    out: list[tuple[str, int, str]] = []
+    path: str | None = None
+    n = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            target = line[4:]
+            path = target[2:] if target.startswith("b/") else None
+            continue
+        m = _HUNK_RE.match(line)
+        if m:
+            n = int(m.group(1))
+            continue
+        if path and line.startswith("+"):
+            out.append((path, n, line[1:]))
+            n += 1
+    return out
+
+
 def _iban_valid(candidate: str) -> bool:
     s = candidate.replace(" ", "")
     if not 15 <= len(s) <= 34:
         return False
-    rearranged = s[4:] + s[:4]
-    digits = "".join(str(int(c, 36)) for c in rearranged)
+    digits = "".join(str(int(c, 36)) for c in s[4:] + s[:4])
     return int(digits) % 97 == 1
 
 
 def _allowed(path: str, text: str, allow: list[AllowEntry]) -> bool:
-    return any(a.path == path and a.line_re.search(text) for a in allow)
+    name = Path(path).name
+    return any(a.path in (path, name) and a.line_re.search(text) for a in allow)
+
+
+def _email_allowed(domain: str) -> bool:
+    d = domain.lower()
+    return any(d == a or d.endswith("." + a) for a in ALLOWED_EMAIL_DOMAINS)
+
+
+def scan_lines(entries, private_patterns, allow) -> list[Hit]:
+    private = [re.compile(p, re.IGNORECASE) for p in private_patterns if p.strip()]
+    hits: list[Hit] = []
+    for path, n, line in entries:
+        if _allowed(path, line, allow):
+            continue
+        if any(not _email_allowed(m.group(1)) for m in EMAIL_RE.finditer(line)):
+            hits.append(Hit(path, n, "public", "email"))
+        if any(_iban_valid(m.group(1)) for m in IBAN_RE.finditer(line)):
+            hits.append(Hit(path, n, "public", "iban"))
+        # digit groups inside an IBAN ("... 0044 0532 ...") must not read as a phone number
+        if PHONE_RE.search(IBAN_RE.sub(" ", line)):
+            hits.append(Hit(path, n, "public", "phone"))
+        if any(rx.search(line) for rx in private):
+            hits.append(Hit(path, n, "private", "private-list hit"))
+    return hits
 
 
 def scan_files(paths, private_patterns, allow) -> list[Hit]:
-    private = [re.compile(p, re.IGNORECASE) for p in private_patterns if p.strip()]
-    hits: list[Hit] = []
-    for p in paths:
-        p = Path(p)
+    entries = []
+    for p in map(Path, paths):
         try:
             text = p.read_text(encoding="utf-8")
         except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
             continue
-        rel = str(p)
-        for n, line in enumerate(text.splitlines(), start=1):
-            if _allowed(rel, line, allow) or _allowed(p.name, line, allow):
-                continue
-            for m in EMAIL_RE.finditer(line):
-                dom = m.group(1).lower()
-                if not any(dom == d or dom.endswith("." + d) for d in ALLOWED_EMAIL_DOMAINS):
-                    hits.append(Hit(rel, n, "public", "email"))
-                    break
-            if any(_iban_valid(m.group(1)) for m in IBAN_RE.finditer(line)):
-                hits.append(Hit(rel, n, "public", "iban"))
-            # digit groups inside an IBAN ("... 0044 0532 ...") must not read as a phone number
-            if PHONE_RE.search(IBAN_RE.sub(" ", line)):
-                hits.append(Hit(rel, n, "public", "phone"))
-            if any(rx.search(line) for rx in private):
-                hits.append(Hit(rel, n, "private", "private-list hit"))
-    return hits
+        entries += [(str(p), n, line) for n, line in enumerate(text.splitlines(), start=1)]
+    return scan_lines(entries, private_patterns, allow)
 
 
 def report(hits: list[Hit]) -> None:
     for h in hits:
         if h.kind == "private":
-            print(f"{h.path}:{h.line}: private-list hit")
+            print(f"{h.path}:{h.line}: private-list hit")  # never the pattern or the text
         else:
             print(f"{h.path}:{h.line}: {h.label}")
 
@@ -396,9 +454,15 @@ def main(argv: list[str]) -> int:
         print("leak-guard: private list not available in this context; public patterns only")
     allow_file = Path(".leak-guard-allow")
     allow = parse_allow(allow_file.read_text(encoding="utf-8")) if allow_file.exists() else []
-    hits = scan_files([Path(a) for a in argv], private, allow)
+    if argv[:1] == ["--diff"]:
+        entries = added_lines(Path(argv[1]).read_text(encoding="utf-8"))
+        hits = scan_lines(entries, private, allow)
+        scope = f"{len(entries)} added line(s)"
+    else:
+        hits = scan_files(argv, private, allow)
+        scope = f"{len(argv)} file(s)"
     report(hits)
-    print(f"leak-guard: {len(argv)} file(s) scanned, {len(hits)} hit(s)")
+    print(f"leak-guard: {scope} scanned, {len(hits)} hit(s)")
     return 1 if hits else 0
 
 
@@ -441,14 +505,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Scan files changed in this pull request
+      - name: Scan the lines this pull request adds
         env:
           LEAK_GUARD_PRIVATE_LIST: ${{ secrets.LEAK_GUARD_PRIVATE_LIST }}
           BASE_REF: ${{ github.base_ref }}
         run: |
-          git diff --name-only --diff-filter=ACMR "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
-          if [ ! -s /tmp/changed.txt ]; then echo "leak-guard: no changed files"; exit 0; fi
-          xargs -d '\n' python3 scripts/leak_guard.py < /tmp/changed.txt
+          git diff -U0 --no-color --diff-filter=ACMR "origin/${BASE_REF}...HEAD" > /tmp/pr.diff
+          python3 scripts/leak_guard.py --diff /tmp/pr.diff
 ```
 
 Never use `pull_request_target` here: it would hand the secret to fork code. Dependabot and fork PRs get no secret and run public patterns only; the script says so in the log and does not fail for that reason (§6).
@@ -461,7 +524,17 @@ Never use `pull_request_target` here: it would hand the secret to fork code. Dep
 4. Remove the fixture, push. Expected: green.
 5. Record steps 1–4 with the run URLs in the PR body. Then the Founder replaces the test value with the real private list (owner's domains, family names, reference-number patterns) — only he types that content.
 
-- [ ] **Step 6: Commit and PR**
+- [ ] **Step 6: Legacy content — one local run by the Founder**
+
+The CI gate sees only added lines, so content already in the repository is never scanned by it. Measured 2026-09-24: the owner's own domain appears in eight tracked files (README, two May design documents, `pyproject.toml`, four test files), and the May test fixtures use real-looking domains. Only the Founder holds the private list, so only he can run the full check:
+
+```bash
+LEAK_GUARD_PRIVATE_LIST="$(cat <path-to-private-list>)" git ls-files -z | xargs -0 python3 scripts/leak_guard.py
+```
+
+He decides what gets cleaned up, as a separate PR with its own acceptance. This plan does not rewrite legacy content. Later tasks move only the legacy lines they touch to `example.*` addresses, and the added-lines gate enforces that by itself.
+
+- [ ] **Step 7: Commit and PR**
 
 ```bash
 git add scripts/leak_guard.py .leak-guard-allow .github/workflows/leak-guard.yml tests/test_leak_guard.py
@@ -485,7 +558,11 @@ After merge, ask the Founder to make `leak-guard` a required check on `main` (a 
 - Produces: `perform_unsubscribe(action: UnsubAction, *, timeout: float = 15.0) -> tuple[bool, str]` — for `kind == "mailto"` it returns `(False, "manual: mailto-only unsubscribe is not supported")` and sends nothing. `parse_list_unsubscribe` still returns `mailto` actions so they can be listed.
 - CLI `unsubscribe --apply` payload gains `"manual_unsubscribe": [<mailto targets>]`.
 
-**Decided behavior (Review Focus 1):** when `--apply` finds **no HTTPS action**, nothing is sent, **nothing is moved to Trash**, the payload lists the mailto targets under `manual_unsubscribe`, and the audit result is `"manual"`. Rationale: trashing the mail of a sender who is still subscribed hides the problem instead of solving it. Existing behavior for HTTPS actions is unchanged (messages move to Trash regardless of the HTTP result). Sensei may overrule this at acceptance.
+**Decided behavior (Review Focus 1):** three cases under `--apply`, and only the first changes.
+(a) **mailto-only sender:** nothing is sent, **nothing is moved to Trash**, the mailto targets come back under `manual_unsubscribe`, audit result `"manual"`. Trashing the mail of a sender who is still subscribed hides the problem instead of solving it.
+(b) **HTTPS action present** (with or without mailto): unchanged — HTTPS one-click runs, matching mail moves to Trash regardless of the HTTP result, `manual_unsubscribe` is empty.
+(c) **no List-Unsubscribe header at all:** unchanged — matching mail moves to Trash, `manual_unsubscribe` is empty, audit result `"success"`.
+Sensei may overrule (a) at acceptance.
 
 - [ ] **Step 1: Write the failing no-send test**
 
@@ -543,6 +620,7 @@ def test_parse_mailto_only_still_listed():
 Add a CLI test in the same file for Review Focus 1 (monkeypatch the IMAP side so no server is needed):
 
 ```python
+import json
 from contextlib import contextmanager
 
 from click.testing import CliRunner
@@ -552,7 +630,8 @@ from mailbox_cleanup.auth import Credentials
 from mailbox_cleanup.config import Account
 
 
-def test_apply_mailto_only_does_not_trash_and_lists_manual(monkeypatch):
+def _run_apply(monkeypatch, actions):
+    """Run `unsubscribe --apply` against a fake mailbox; return (payload, moves)."""
     moved = []
 
     class _MB:
@@ -575,23 +654,42 @@ def test_apply_mailto_only_does_not_trash_and_lists_manual(monkeypatch):
     monkeypatch.setattr(
         cli_mod,
         "collect_unsub_targets",
-        lambda mb, sender, folder: {
-            "uids": ["7"],
-            "actions": [{"kind": "mailto", "target": "unsub@example.com", "one_click": False}],
-        },
+        lambda mb, sender, folder: {"uids": ["7"], "actions": actions},
     )
     monkeypatch.setattr(cli_mod, "resolve_folder", lambda mb, kind: "Trash")
     monkeypatch.setattr(cli_mod, "log_action", lambda **kw: None)
-
     res = CliRunner().invoke(
         cli_mod.cli, ["unsubscribe", "--sender", "news@example.com", "--apply", "--json"]
     )
     assert res.exit_code == 0, res.output
-    import json
+    return json.loads(res.output), moved
 
-    payload = json.loads(res.output)
+
+def test_apply_mailto_only_keeps_mail_and_lists_manual(monkeypatch):
+    payload, moved = _run_apply(
+        monkeypatch, [{"kind": "mailto", "target": "unsub@example.com", "one_click": False}]
+    )
     assert payload["manual_unsubscribe"] == ["unsub@example.com"]
     assert moved == []
+
+
+def test_apply_https_and_mailto_runs_https_trashes_and_lists_nothing(monkeypatch):
+    monkeypatch.setattr(cli_mod, "perform_unsubscribe", lambda a: (True, "HTTP 200"))
+    payload, moved = _run_apply(
+        monkeypatch,
+        [
+            {"kind": "https", "target": "https://example.com/u", "one_click": True},
+            {"kind": "mailto", "target": "unsub@example.com", "one_click": False},
+        ],
+    )
+    assert payload["manual_unsubscribe"] == []
+    assert moved == [(("7",), "Trash")]
+
+
+def test_apply_without_list_unsubscribe_header_still_trashes(monkeypatch):
+    payload, moved = _run_apply(monkeypatch, [])
+    assert payload["manual_unsubscribe"] == []
+    assert moved == [(("7",), "Trash")]
 ```
 
 Run: `uv run pytest tests/test_unsubscribe.py -v`
@@ -629,23 +727,88 @@ def perform_unsubscribe(action: UnsubAction, *, timeout: float = 15.0) -> tuple[
     return False, f"Unknown action kind: {action.kind}"
 ```
 
-In `src/mailbox_cleanup/cli.py`, inside `unsubscribe_cmd`, replace the `if apply:` block with:
+In `src/mailbox_cleanup/cli.py`, replace the whole `unsubscribe_cmd` function (decorators unchanged) with:
 
 ```python
-            results: list[dict] = []
-            manual = [a["target"] for a in actions if a["kind"] == "mailto"]
-            https_actions = [a for a in actions if a["kind"] == "https"]
-            if apply and https_actions:
-                a = UnsubAction(**{k: https_actions[0][k] for k in ("kind", "target", "one_click")})
-                ok, info = perform_unsubscribe(a)
-                results.append({"action": https_actions[0], "ok": ok, "info": info})
-                # Unchanged: move matching messages to Trash regardless of the HTTP result
-                trash = resolve_folder(mb, "trash")
-                if trash and uids:
-                    mb.move(uids, trash)
-```
+def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
+    """Parse List-Unsubscribe for sender; optionally run HTTPS one-click.
 
-Add `"manual_unsubscribe": manual,` to `payload`, set the audit `result` to `"manual"` when `apply and not https_actions`, and change the docstring to `"""Parse List-Unsubscribe for sender, optionally execute HTTPS one-click; list mailto-only for manual handling."""`. Declare `manual = []` and `https_actions = []` before the `try` so the payload is defined on every path.
+    mailto-only senders are listed under manual_unsubscribe and their mail is kept.
+    """
+    try:
+        account, creds = resolve_account_and_credentials(
+            account_flag=account_flag, email_flag=email_flag
+        )
+    except AccountFlagsError as e:
+        _fail({"error_code": e.error_code, "message": str(e)}, 4, json_mode)
+        return
+    except AuthMissingError as e:
+        _fail({"error_code": "auth_missing", "message": str(e)}, 3, json_mode)
+        return
+    uids: list[str] = []
+    actions: list[dict] = []
+    results: list[dict] = []
+    manual: list[str] = []
+    try:
+        with imap_connect(creds, port=account.port) as mb:
+            data = collect_unsub_targets(mb, sender=sender, folder=folder)
+            uids = data["uids"]
+            actions = data["actions"]
+            https_actions = [a for a in actions if a["kind"] == "https"]
+            if not https_actions:
+                manual = [a["target"] for a in actions if a["kind"] == "mailto"]
+            if apply:
+                if https_actions:
+                    first = https_actions[0]
+                    a = UnsubAction(**{k: first[k] for k in ("kind", "target", "one_click")})
+                    ok, info = perform_unsubscribe(a)
+                    results.append({"action": first, "ok": ok, "info": info})
+                # (b) and (c): move to Trash as before. (a) mailto-only: keep the mail.
+                if not manual:
+                    trash = resolve_folder(mb, "trash")
+                    if trash and uids:
+                        mb.move(uids, trash)
+    except Exception as e:
+        _fail({"error_code": "operation_error", "message": str(e)}, 2, json_mode)
+        return
+    payload = {
+        "ok": True,
+        "schema_version": SCHEMA_VERSION,
+        "subcommand": "unsubscribe",
+        "dry_run": not apply,
+        "folder": folder,
+        "sender": sender,
+        "matching_count": len(uids),
+        "actions": actions,
+        "results": results,
+        "manual_unsubscribe": manual,
+    }
+    if apply:
+        if manual:
+            result = "manual"
+        elif not results or results[0]["ok"]:
+            result = "success"
+        else:
+            result = "partial"
+        log_action(
+            subcommand="unsubscribe",
+            account=account.alias,
+            args={"sender": sender},
+            folder=folder,
+            affected_uids=[] if manual else uids,
+            result=result,
+        )
+    if json_mode:
+        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        verb = "Performed" if apply else "Would attempt"
+        click.echo(
+            f"{verb} unsubscribe for {sender}: "
+            f"{len(actions)} action(s) found, {len(uids)} matching messages"
+        )
+        if manual:
+            click.echo(f"Unsubscribe by hand (mailto only): {', '.join(manual)}")
+```
 
 In `skill/SKILL.md`, wherever unsubscribe is described, state: HTTPS one-click only; `mailto:`-only senders come back under `manual_unsubscribe` and the user unsubscribes by hand.
 
@@ -824,6 +987,7 @@ git commit -m "feat(manage): content envelope and args-free audit record"
 - Create: `src/mailbox_cleanup/manage/search.py`
 - Create: `src/mailbox_cleanup/manage/cli.py`
 - Modify: `src/mailbox_cleanup/cli.py` (register the group, one line at the end)
+- Create: `tests/integration/conftest.py` (shared manage fixtures)
 - Create: `tests/integration/test_manage_search.py`
 - Create: `tests/test_manage_no_destructive.py`
 
@@ -890,16 +1054,16 @@ Content-Type: text/html; charset=utf-8
 ```
 
 ```python
-# tests/integration/test_manage_search.py
+# tests/integration/conftest.py
 import time
 from pathlib import Path
 
 import pytest
 from imap_tools import MailBoxUnencrypted
 
-from mailbox_cleanup.manage.search import search
+from mailbox_cleanup.auth import Credentials
+from mailbox_cleanup.config import Account
 
-pytestmark = pytest.mark.integration
 MANAGE_FIX = Path(__file__).parent.parent / "fixtures" / "manage"
 
 
@@ -915,26 +1079,60 @@ def manage_mailbox(fresh_mailbox):
     yield fresh_mailbox
 
 
-def _mb(g):
-    return MailBoxUnencrypted(g["host"], port=g["port"]).login(g["user"], g["password"])
+@pytest.fixture
+def open_mb():
+    def _open(g):
+        return MailBoxUnencrypted(g["host"], port=g["port"]).login(g["user"], g["password"])
+
+    return _open
 
 
-def test_search_by_sender_returns_headers_only(manage_mailbox):
-    with _mb(manage_mailbox) as mb:
+@pytest.fixture
+def patch_account(monkeypatch, tmp_path):
+    """Point the manage CLI at GreenMail; audit log goes to tmp_path/audit.log."""
+
+    def _patch(g):
+        from mailbox_cleanup.manage import cli as mcli
+
+        monkeypatch.setenv("MAILBOX_CLEANUP_AUDIT_LOG", str(tmp_path / "audit.log"))
+        monkeypatch.setattr(
+            mcli,
+            "resolve_account_and_credentials",
+            lambda **kw: (
+                Account(alias="t", email="test@localhost", server=g["host"], port=g["port"]),
+                Credentials(email=g["user"], password=g["password"], server=g["host"]),
+            ),
+        )
+        return tmp_path / "audit.log"
+
+    return _patch
+```
+
+```python
+# tests/integration/test_manage_search.py
+import pytest
+
+from mailbox_cleanup.manage.search import search
+
+pytestmark = pytest.mark.integration
+
+
+def test_search_by_sender_returns_headers_only(manage_mailbox, open_mb):
+    with open_mb(manage_mailbox) as mb:
         hits = search(mb, sender="mira@example.org")
     assert len(hits) == 1
     assert hits[0].sender == "mira@example.org"
     assert "Rückfrage" in hits[0].subject
 
 
-def test_search_non_ascii_subject(manage_mailbox):
-    with _mb(manage_mailbox) as mb:
+def test_search_non_ascii_subject(manage_mailbox, open_mb):
+    with open_mb(manage_mailbox) as mb:
         hits = search(mb, subject="Rückfrage")
     assert [h.sender for h in hits] == ["mira@example.org"]
 
 
-def test_search_without_filter_returns_newest_first(manage_mailbox):
-    with _mb(manage_mailbox) as mb:
+def test_search_without_filter_returns_newest_first(manage_mailbox, open_mb):
+    with open_mb(manage_mailbox) as mb:
         hits = search(mb, limit=10)
     assert [h.sender for h in hits][:2] == ["buero@example.com", "mira@example.org"]
 ```
@@ -1014,37 +1212,21 @@ import json
 
 from click.testing import CliRunner
 
-from mailbox_cleanup.auth import Credentials
-from mailbox_cleanup.config import Account
 
-
-def _patch_account(monkeypatch, g, tmp_path):
-    from mailbox_cleanup.manage import cli as mcli
-
-    monkeypatch.setenv("MAILBOX_CLEANUP_AUDIT_LOG", str(tmp_path / "audit.log"))
-    monkeypatch.setattr(
-        mcli,
-        "resolve_account_and_credentials",
-        lambda **kw: (
-            Account(alias="t", email="test@localhost", server=g["host"], port=g["port"]),
-            Credentials(email=g["user"], password=g["password"], server=g["host"]),
-        ),
-    )
-
-
-def test_cli_search_envelopes_every_candidate(manage_mailbox, monkeypatch, tmp_path):
+def test_cli_search_envelopes_every_candidate(manage_mailbox, patch_account):
     from mailbox_cleanup.cli import cli
 
-    _patch_account(monkeypatch, manage_mailbox, tmp_path)
+    audit = patch_account(manage_mailbox)
     res = CliRunner().invoke(cli, ["manage", "search", "--sender", "mira@example.org", "--json"])
     assert res.exit_code == 0, res.output
     out = json.loads(res.output)
     assert out["subcommand"] == "manage.search"
     (c,) = out["candidates"]
     assert c["mail"].startswith("<mail-content>\n") and "mira@example.org" in c["mail"]
-    audit = (tmp_path / "audit.log").read_text(encoding="utf-8")
-    assert "mira@example.org" not in audit
+    assert "mira@example.org" not in audit.read_text(encoding="utf-8")
 ```
+
+(Move the two imports to the top of the file when appending; ruff's isort rule requires it.)
 
 ```python
 # src/mailbox_cleanup/manage/cli.py
@@ -1305,13 +1487,14 @@ Nachtrag: Beginn 19 Uhr.
 
 ```python
 # tests/integration/test_manage_read_thread.py
+import json
+
 import pytest
+from click.testing import CliRunner
 
 from mailbox_cleanup.manage.read import read_message
 from mailbox_cleanup.manage.search import search
 from mailbox_cleanup.manage.thread import thread
-
-from .test_manage_search import _mb, manage_mailbox  # noqa: F401 — shared fixture
 
 pytestmark = pytest.mark.integration
 
@@ -1320,24 +1503,37 @@ def _uid(mb, sender, subject=None):
     return search(mb, sender=sender, subject=subject)[0].uid
 
 
-def test_read_html_only_mail_returns_text(manage_mailbox):
-    with _mb(manage_mailbox) as mb:
+def test_read_html_only_mail_returns_text(manage_mailbox, open_mb):
+    with open_mb(manage_mailbox) as mb:
         m = read_message(mb, uid=_uid(mb, "buero@example.com", "Elternabend"))
     assert "Donnerstag" in m.text and "<b>" not in m.text
 
 
-def test_read_decodes_encoded_word_subject(manage_mailbox):
-    with _mb(manage_mailbox) as mb:
+def test_read_decodes_encoded_word_subject(manage_mailbox, open_mb):
+    with open_mb(manage_mailbox) as mb:
         m = read_message(mb, uid=_uid(mb, "mira@example.org"))
     assert m.subject == "Position als Architekt – Rückfrage"
     assert m.message_id == "<r1@example.org>"
 
 
-def test_thread_follows_in_reply_to(manage_mailbox):
-    with _mb(manage_mailbox) as mb:
+def test_thread_follows_in_reply_to(manage_mailbox, open_mb):
+    with open_mb(manage_mailbox) as mb:
         reply_uid = _uid(mb, "buero@example.com", "Re: Elternabend")
         msgs = thread(mb, uid=reply_uid)
     assert [m.message_id for m in msgs] == ["<s1@example.com>", "<s2@example.com>"]
+
+
+def test_cli_read_escapes_a_hostile_body(manage_mailbox, open_mb, patch_account):
+    from mailbox_cleanup.cli import cli
+
+    patch_account(manage_mailbox)
+    with open_mb(manage_mailbox) as mb:
+        uid = _uid(mb, "mira@example.org")
+    res = CliRunner().invoke(cli, ["manage", "read", "--uid", uid, "--json"])
+    assert res.exit_code == 0, res.output
+    mail = json.loads(res.output)["message"]["mail"]
+    assert mail.startswith("<mail-content>\n")
+    assert mail.count("</mail-content>") == 1  # the fixture's own closing tag is escaped
 ```
 
 Run: `uv run pytest tests/integration/test_manage_read_thread.py -v` — expected FAIL (`thread` missing).
@@ -1435,8 +1631,6 @@ def thread_cmd(account_flag, folder, uid, json_mode):
                       uids=[m.uid for m in msgs], result="success", arg_keys=["uid"])
     _out({"ok": True, "subcommand": "manage.thread", "messages": [_message_json(m) for m in msgs]})
 ```
-
-Add a CLI test to `tests/integration/test_manage_read_thread.py`, reusing `_patch_account` from Task 5, asserting that the output of `manage read` has `"mail"` starting with `<mail-content>` and that the literal `</mail-content>` from fixture 01 appears only once (the closing tag).
 
 - [ ] **Step 6: Full suite, commit**
 
@@ -1569,7 +1763,7 @@ Run: `uv run pytest tests/test_manage_draft_unit.py tests/test_no_send.py -v` �
 ```python
 # tests/integration/test_manage_draft.py
 import pytest
-from imap_tools import AND, MailBoxUnencrypted
+from imap_tools import AND
 
 from mailbox_cleanup.folders import resolve_folder
 from mailbox_cleanup.manage.draft import NoDraftsFolderError, build_reply, save_draft
@@ -1579,20 +1773,20 @@ from mailbox_cleanup.manage.search import search
 pytestmark = pytest.mark.integration
 
 
-def _mb(g):
-    return MailBoxUnencrypted(g["host"], port=g["port"]).login(g["user"], g["password"])
-
-
-def test_draft_lands_in_drafts_with_flag_and_threading(drafts_ready):
-    import smtplib, time  # noqa: E401 — test-only seeding
+def test_draft_lands_in_drafts_with_flag_and_threading(drafts_ready, open_mb):
+    import smtplib  # test-only seeding
+    import time
 
     s = smtplib.SMTP("127.0.0.1", 3025)
-    s.sendmail("seed@example.com", ["test@localhost"],
-               b"From: mira@example.org\r\nTo: test@localhost\r\nSubject: Frage\r\n"
-               b"Message-ID: <q1@example.org>\r\n\r\nHallo\r\n")
+    s.sendmail(
+        "seed@example.com",
+        ["test@localhost"],
+        b"From: mira@example.org\r\nTo: test@localhost\r\nSubject: Frage\r\n"
+        b"Message-ID: <q1@example.org>\r\n\r\nHallo\r\n",
+    )
     s.quit()
     time.sleep(0.5)
-    with _mb(drafts_ready) as mb:
+    with open_mb(drafts_ready) as mb:
         orig = read_message(mb, uid=search(mb, sender="mira@example.org")[0].uid)
         msg, _ = build_reply(orig, from_addr="test@localhost", body="Antwort")
         folder = save_draft(mb, msg)
@@ -1660,7 +1854,37 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
           "warnings": warnings, "subject": wrap(msg["Subject"])})
 ```
 
-Add a CLI test (reuse `_patch_account`) that writes a body file under `tmp_path`, runs `manage draft`, and asserts `drafts_folder` is set and exit code 0.
+Add to `tests/integration/test_manage_draft.py`:
+
+```python
+def test_cli_draft_writes_and_reports_folder(drafts_ready, patch_account, tmp_path, open_mb):
+    import json
+    import smtplib
+    import time
+
+    from click.testing import CliRunner
+
+    from mailbox_cleanup.cli import cli
+
+    s = smtplib.SMTP("127.0.0.1", 3025)
+    s.sendmail(
+        "seed@example.com",
+        ["test@localhost"],
+        b"From: mira@example.org\r\nTo: test@localhost\r\nSubject: Termin\r\n"
+        b"Message-ID: <t1@example.org>\r\n\r\nPasst Dienstag?\r\n",
+    )
+    s.quit()
+    time.sleep(0.5)
+    patch_account(drafts_ready)
+    with open_mb(drafts_ready) as mb:
+        uid = search(mb, sender="mira@example.org")[0].uid
+    body = tmp_path / "body.txt"
+    body.write_text("Dienstag passt.", encoding="utf-8")
+    res = CliRunner().invoke(cli, ["manage", "draft", "--uid", uid, "--body-file", str(body)])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert out["drafts_folder"] and out["warnings"] == []
+```
 
 - [ ] **Step 5: Full suite, commit**
 
@@ -2188,11 +2412,15 @@ def main() -> int:
         return 0
     reason = decide((payload.get("tool_input") or {}).get("command") or "")
     if reason:
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": f"mailbox-autopilot never sends mail ({reason} blocked)",
-        }}))
+        why = f"mailbox-autopilot never sends mail ({reason} blocked)"
+        out = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": why,
+            }
+        }
+        print(json.dumps(out))
     return 0
 
 
@@ -2394,6 +2622,8 @@ description = "Clean up an IMAP mailbox and draft replies. Never sends mail."
 mailbox-autopilot = "mailbox_cleanup.cli:cli"
 mailbox-cleanup = "mailbox_cleanup.cli:cli"
 ```
+
+**Open decision for Sensei, do not settle it silently:** version `0.3.0` contradicts the existing deprecation text on `--email` ("Removed in v0.3", `cli_helpers.py`). Either remove `--email` in this task (a breaking change; the `*email_flag*` tests go with it) or change the text to name a later version. Ask before Step 2.
 
 Change the group docstring in `cli.py` to `"""Clean up an IMAP mailbox and draft replies. Never sends mail."""`. In skills, README and `docs/smoke-test.md`, use `mailbox-autopilot` in examples and state once that `mailbox-cleanup` remains an alias. Run `uv lock`.
 
