@@ -63,7 +63,7 @@ Roles: **Obi** builds. **Sensei** is the product manager: owns requirements, acc
 | 1 | `search` | Returns candidates (UID, sender, subject, date), no bodies | Base |
 | 2 | `read` | Returns one message's body inside the content envelope (§5) | Base |
 | 3 | `thread` | Returns the messages of a thread (References / In-Reply-To), each enveloped | Base, `read` |
-| 4 | `draft` | Appends a reply to the special-use `\Drafts` folder with the `\Draft` flag and correct `In-Reply-To`/`References` | Base |
+| 4 | `draft` | Appends a reply to the drafts folder (resolved per §7.2 row 2) with the `\Draft` flag and correct `In-Reply-To`/`References` | Base |
 | 5 | `KnowledgeSource` interface + `MarkdownFolderSource` | Loads private playbook overlays from configured folders | Filesystem only |
 | 6 | Playbook loader | Merges each public playbook with its overlays by playbook id, applies precedence, warns on conflicts | Units 5, `playbooks/` |
 
@@ -168,7 +168,7 @@ Roles: **Obi** builds. **Sensei** is the product manager: owns requirements, acc
 | # | Case | Behaviour |
 |---|---|---|
 | 1 | Connection or login fails | Clear message, stop. No retry loop (existing behaviour) |
-| 2 | No special-use `\Drafts` folder | Stop with a message. Never create a folder on a guess |
+| 2 | No drafts folder found | Resolve by the special-use `\Drafts` flag first, then by the conventional names `Drafts`, `Entwürfe`, `Entwuerfe`. If neither finds one: stop with a message. Never create a folder on a guess |
 | 3 | No playbook matches | Generic path. Ask the user when the tone is unclear |
 | 4 | Configured overlay folder missing | Loud warning, continue with the generic playbook only |
 | 5 | Same playbook overlaid by two sources | Use the first source, warn loudly |
@@ -179,8 +179,8 @@ Roles: **Obi** builds. **Sensei** is the product manager: owns requirements, acc
 ## 8. Testing
 
 1. **Units:** each manage unit and the playbook loader against synthetic data.
-2. **Integration:** against the existing GreenMail test server (`tests/docker-compose.test.yml`, `greenmail/standalone:2.1.0`). Asserted: the draft lands in `\Drafts`, carries `\Draft`, and threads correctly.
-   - **Unmeasured:** whether this GreenMail setup exposes a special-use `\Drafts` folder. Verifying that is the first plan task. If it does not, the test creates the folder in setup, and that is stated.
+2. **Integration:** against the existing GreenMail test server (`tests/docker-compose.test.yml`, `greenmail/standalone:2.1.0`). Asserted: the draft lands in the resolved drafts folder, carries `\Draft`, and threads correctly.
+   - **Measured 2026-09-24 (PR #33):** `greenmail/standalone:2.1.0` exposes only `INBOX`, no `\Drafts` folder by flag or by name. The test setup creates `Drafts` and says so.
 3. **Hook:** one failing test per blocked send route, plus pass-through tests for ordinary commands.
 4. **No-send invariant:** a test that fails if `smtplib` is imported anywhere in `src/`. Rule 7 applies: add an import, watch it fail, restore.
 5. **Envelope escaping:** a body containing `</mail-content>` comes back escaped.
