@@ -1,0 +1,23 @@
+name: Leak guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  leak-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Scan the lines this pull request adds
+        env:
+          LEAK_GUARD_PRIVATE_LIST: ${{ secrets.LEAK_GUARD_PRIVATE_LIST }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff -U0 --no-color --text --diff-filter=ACMRT "origin/${BASE_REF}...HEAD" > /tmp/pr.diff
+          python3 scripts/leak_guard.py --diff /tmp/pr.diff
