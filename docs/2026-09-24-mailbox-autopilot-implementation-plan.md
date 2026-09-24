@@ -237,7 +237,7 @@ def _write(tmp_path, name, text):
 
 
 def test_example_domains_pass(tmp_path):
-    p = _write(tmp_path, "a.py", "x = 'anna@example.com'\ny = 'bot@example.org'\nz = 'test@localhost'\n")
+    p = _write(tmp_path, "a.py", "x = 'anna@example.com'\ny = 'bot@example.org'\nz = 'test@localhost'\nw = '<a@x.example>'\n")
     assert lg.scan_files([p], [], []) == []
 
 
@@ -305,7 +305,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-ALLOWED_EMAIL_DOMAINS = ("example.com", "example.org", "example.net", "localhost")
+ALLOWED_EMAIL_DOMAINS = ("example.com", "example.org", "example.net", "example", "localhost")  # RFC 2606
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)")
 IBAN_RE = re.compile(r"\b([A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?)\b")
 PHONE_RE = re.compile(r"(?<![\w.])(?:\+|00)\d{1,3}[ /-]?\(?\d{2,5}\)?[ /-]?\d{3,}(?:[ /-]?\d+)*")
