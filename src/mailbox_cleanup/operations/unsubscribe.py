@@ -89,10 +89,11 @@ def parse_list_unsubscribe(
     )
     for raw in _LINK_RE.findall(list_unsubscribe or ""):
         raw = raw.strip()
-        if raw.startswith("mailto:"):
+        scheme = raw.lower()  # URI schemes are case-insensitive (RFC 3986 §3.1)
+        if scheme.startswith("mailto:"):
             target = raw[len("mailto:") :].split("?", 1)[0]
             actions.append(UnsubAction(kind="mailto", target=target, one_click=False))
-        elif raw.startswith(("http://", "https://")):
+        elif scheme.startswith(("http://", "https://")):
             actions.append(UnsubAction(kind="https", target=raw, one_click=one_click))
     # Prefer https first, then mailto
     actions.sort(key=lambda a: 0 if a.kind == "https" else 1)

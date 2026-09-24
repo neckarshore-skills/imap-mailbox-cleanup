@@ -167,7 +167,7 @@ def test_perform_https_disables_redirects():
 # --- CLI `unsubscribe --apply` (Review Focus 1) -----------------------------
 
 
-def _run_apply(monkeypatch, actions):
+def _run_apply(monkeypatch, actions, flags=("--apply", "--json")):
     """Run `unsubscribe --apply` against a fake mailbox; return (payload, moves, audit)."""
     moved = []
     audit = []
@@ -196,10 +196,10 @@ def _run_apply(monkeypatch, actions):
     )
     monkeypatch.setattr(cli_mod, "resolve_folder", lambda mb, kind: "Trash")
     monkeypatch.setattr(cli_mod, "log_action", lambda **kw: audit.append(kw))
-    res = CliRunner().invoke(
-        cli_mod.cli, ["unsubscribe", "--sender", "news@example.com", "--apply", "--json"]
-    )
+    res = CliRunner().invoke(cli_mod.cli, ["unsubscribe", "--sender", "news@example.com", *flags])
     assert res.exit_code == 0, res.output
+    if "--json" not in flags:
+        return res.output, moved, audit
     return json.loads(res.output), moved, audit
 
 
@@ -232,3 +232,36 @@ def test_apply_without_list_unsubscribe_header_still_trashes(monkeypatch):
     assert payload["manual_unsubscribe"] == []
     assert moved == [(("7",), "Trash")]
     assert [a["result"] for a in audit] == ["success"]
+
+
+MAILTO_ONLY = [{"kind": "mailto", "target": "unsub@example.com", "one_click": False}]
+
+
+def test_dry_run_mailto_only_lists_manual_and_touches_nothing(monkeypatch):
+    payload, moved, audit = _run_apply(monkeypatch, MAILTO_ONLY, flags=("--json",))
+    assert payload["dry_run"] is True
+    assert payload["manual_unsubscribe"] == ["unsub@example.com"]
+    assert moved == []
+    assert audit == []
+
+
+def test_apply_mailto_only_text_output_does_not_claim_it_performed(monkeypatch):
+    out, moved, _ = _run_apply(monkeypatch, MAILTO_ONLY, flags=("--apply",))
+    assert "Performed" not in out
+    assert "unsub@example.com" in out
+    assert moved == []
+
+
+@pytest.mark.parametrize(
+    "header, kind",
+    [
+        ("<MAILTO:unsub@example.com?subject=unsubscribe>", "mailto"),
+        ("<Mailto:unsub@example.com>", "mailto"),
+        ("<HTTPS://example.com/unsub>", "https"),
+    ],
+)
+def test_parse_scheme_is_case_insensitive(header, kind):
+    """A mailto-only sender must never fall through to the no-header case, which trashes
+    the mail and reports success while the sender stays subscribed (Review Focus 1)."""
+    actions = parse_list_unsubscribe(list_unsubscribe=header, list_unsubscribe_post=None)
+    assert [a.kind for a in actions] == [kind]

@@ -847,11 +847,12 @@ def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
     if json_mode:
         click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        verb = "Performed" if apply else "Would attempt"
-        click.echo(
-            f"{verb} unsubscribe for {sender}: "
-            f"{len(actions)} action(s) found, {len(uids)} matching messages"
-        )
+        counts = f"{len(actions)} action(s) found, {len(uids)} matching messages"
+        if apply and manual:
+            click.echo(f"No unsubscribe performed for {sender}, all mail kept: {counts}")
+        else:
+            verb = "Performed" if apply else "Would attempt"
+            click.echo(f"{verb} unsubscribe for {sender}: {counts}")
         if manual:
             click.echo(f"Unsubscribe by hand (mailto only): {', '.join(manual)}")
 
