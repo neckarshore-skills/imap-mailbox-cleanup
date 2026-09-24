@@ -91,3 +91,26 @@ def seeded_mailbox(fresh_mailbox):
     eml_files = sorted(FIXTURE_DIR.glob("*.eml"))
     _seed_mailbox(g["host"], g["port"], g["user"], g["password"], eml_files)
     yield g
+
+
+@pytest.fixture
+def drafts_ready(fresh_mailbox):
+    """Guarantee a drafts folder the resolver can find.
+
+    Production code never creates it (spec §7.2). Only this test setup does,
+    and only when GreenMail has none — see the PR body for the measurement.
+    """
+    from mailbox_cleanup.folders import resolve_folder
+
+    g = fresh_mailbox
+    with MailBoxUnencrypted(g["host"], port=g["port"]).login(g["user"], g["password"]) as mb:
+        if resolve_folder(mb, "drafts") is None:
+            mb.folder.create("Drafts")
+            print("TEST SETUP: created 'Drafts' (GreenMail has no \\Drafts folder)")
+        name = resolve_folder(mb, "drafts")
+        mb.folder.set(name)
+        uids = [m.uid for m in mb.fetch(mark_seen=False) if m.uid]
+        if uids:
+            mb.delete(uids)  # empty the drafts folder between tests
+        mb.folder.set("INBOX")
+    yield g

@@ -6,6 +6,7 @@ German default UI.
 
 TRASH_FALLBACKS = ("Papierkorb", "Trash", "Deleted Messages", "Deleted Items")
 ARCHIVE_FALLBACKS = ("Archive", "Archiv")
+DRAFTS_FALLBACKS = ("Drafts", "Entwürfe", "Entwuerfe")
 
 _SPECIAL_USE_FLAGS = {
     "trash": "\\Trash",
@@ -18,6 +19,7 @@ _SPECIAL_USE_FLAGS = {
 _FALLBACKS = {
     "trash": TRASH_FALLBACKS,
     "archive": ARCHIVE_FALLBACKS,
+    "drafts": DRAFTS_FALLBACKS,
 }
 
 
