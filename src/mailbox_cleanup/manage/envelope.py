@@ -6,11 +6,14 @@ What bounds the damage is that the tool cannot send, delete or move.
 
 import re
 
-_TAG_RE = re.compile(r"<\s*(/?)\s*mail-content\b[^>]*>", re.IGNORECASE)
+# Escape the `<` that starts anything a reader could take for an envelope tag, closed or
+# not. Matching only complete tags (`<...>`) let an unterminated `<mail-content` through,
+# which then swallowed the envelope's real closing tag.
+_TAG_START_RE = re.compile(r"<(?=\s*/?\s*mail-content\b)", re.IGNORECASE)
 
 
 def escape(text: str) -> str:
-    return _TAG_RE.sub(lambda m: f"&lt;{m.group(1)}mail-content&gt;", text)
+    return _TAG_START_RE.sub("&lt;", text)
 
 
 def wrap(text: str) -> str:
