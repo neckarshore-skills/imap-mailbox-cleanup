@@ -2,10 +2,8 @@
 
 import ipaddress
 import re
-import smtplib
 import socket
 from dataclasses import dataclass
-from email.message import EmailMessage
 from urllib.parse import urlparse
 
 import requests
@@ -101,15 +99,9 @@ def parse_list_unsubscribe(
     return actions
 
 
-def perform_unsubscribe(
-    action: UnsubAction,
-    *,
-    smtp_sender: str | None,
-    smtp_password: str | None = None,
-    smtp_host: str = "smtp.ionos.de",
-    smtp_port: int = 587,
-    timeout: float = 15.0,
-) -> tuple[bool, str]:
+def perform_unsubscribe(action: UnsubAction, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """Execute an HTTPS unsubscribe. `mailto:` is never executed (spec §5): the package
+    contains no send code, so mailto-only senders are reported for manual handling."""
     if action.kind == "https":
         # SSRF guard: refuse email-controlled URLs pointing at internal ranges
         # or non-http(s) schemes BEFORE any outbound request is made.
@@ -133,22 +125,8 @@ def perform_unsubscribe(
             return resp.status_code < 400, f"HTTP {resp.status_code}"
         except Exception as e:
             return False, f"HTTPS error: {e}"
-    elif action.kind == "mailto":
-        if not smtp_sender or not smtp_password:
-            return False, "SMTP credentials missing for mailto unsubscribe"
-        msg = EmailMessage()
-        msg["From"] = smtp_sender
-        msg["To"] = action.target
-        msg["Subject"] = "unsubscribe"
-        msg.set_content("unsubscribe")
-        try:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=timeout) as s:
-                s.starttls()
-                s.login(smtp_sender, smtp_password)
-                s.send_message(msg)
-            return True, "SMTP sent"
-        except Exception as e:
-            return False, f"SMTP error: {e}"
+    if action.kind == "mailto":
+        return False, "manual: mailto-only unsubscribe is not supported"
     return False, f"Unknown action kind: {action.kind}"
 
 
