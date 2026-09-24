@@ -102,6 +102,30 @@ def _unquote_git_path(raw: str) -> str:
     return out.decode("utf-8", errors="replace")
 
 
+def _diff_lines(diff_text: str) -> list[str]:
+    """Split `diff_text` on `"\\n"` only, and strip at most one trailing `"\\r"`
+    per line.
+
+    `str.splitlines()` also breaks on `\\x0b \\x0c \\x1c-\\x1e \\x85 \\u2028 \\u2029`
+    and a lone `\\r` -- but git's diff *stream* format only ever ends a line with
+    `"\\n"`. An added line whose own CONTENT contains one of those other break
+    characters (e.g. an embedded `\\x0c` or a lone `\\r`) is git's ONE diff line;
+    splitting on it too turns it into two fragments, desyncing every hunk's
+    declared line count for the rest of that hunk (round-2 finding: the tail end
+    of the hunk then reads as "outside a hunk" and is silently dropped).
+
+    A trailing `"\\r"` *is* stripped: measured 2026-09-24, git reproduces a
+    CRLF-terminated source file's own line ending faithfully in `+`/`-` content
+    (`"+content\\r\\n"`), so a single trailing `\\r` is a real line-ending
+    artifact, not scannable content, on every kind of line (control lines are
+    LF-only per the same measurement, so stripping is a no-op there).
+    """
+    lines = diff_text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # the empty tail from a trailing "\n" -- not an extra line
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+
+
 def added_lines(diff_text: str) -> list[tuple[str, int, str]]:
     """(path, new line number, text) for every '+' line of a `git diff -U0`.
 
@@ -111,28 +135,41 @@ def added_lines(diff_text: str) -> list[tuple[str, int, str]]:
     text happens to start with `++ ` (raw diff line `+++ ...`) would be misread as
     a new file header and silently end scanning for the rest of that file.
 
-    Fails closed (`LeakGuardError`) on a `+++` target that unquotes to neither
-    `b/...` nor `/dev/null` -- a git-quoted (core.quotepath) non-ASCII path must
-    not silently drop the whole file from scanning.
+    Fails closed (`LeakGuardError`) on:
+    - a `+++` target that unquotes to neither `b/...` nor `/dev/null`;
+    - a line inside a hunk's declared count that starts with none of `+ - ' ' \\`;
+    - a line outside a hunk that starts with `+` or `-` but is not a recognised
+      `---`/`+++` header (e.g. a hunk header declaring 0+0 lines followed by a
+      `+` line -- the `+` line would otherwise read as "outside a hunk" and be
+      silently ignored);
+    - a mismatch between the number of `+` lines seen inside hunks and the
+      number of entries actually scanned (a sanity invariant covering any path
+      this state machine did not anticipate, e.g. a `+` line under a `/dev/null`
+      target).
     """
     out: list[tuple[str, int, str]] = []
     path: str | None = None
     n = 0
     remaining = 0  # lines left in the current hunk (old_count + new_count)
     after_minus = False
-    for line in diff_text.splitlines():
+    plus_count = 0
+    for line in _diff_lines(diff_text):
         if remaining > 0:
             if line.startswith("\\"):
                 continue  # "\ No newline at end of file" -- not a counted hunk line
             if line.startswith("+"):
+                plus_count += 1
                 if path is not None:
                     out.append((path, n, line[1:]))
-                    n += 1
+                n += 1
                 remaining -= 1
             elif line.startswith("-"):
                 remaining -= 1
+            elif line.startswith(" "):
+                n += 1
+                remaining -= 1
             else:
-                remaining -= 1  # defensive: keep the state machine advancing
+                raise LeakGuardError(f"malformed hunk line near {path!r}:{n}")
             continue
         if line.startswith("diff --git "):
             path = None
@@ -159,6 +196,13 @@ def added_lines(diff_text: str) -> list[tuple[str, int, str]]:
             n = int(m.group(2))
             new_count = int(m.group(3) or "1")
             remaining = old_count + new_count
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            raise LeakGuardError(f"unexpected diff line outside a hunk (near {path!r})")
+    if plus_count != len(out):
+        raise LeakGuardError(
+            f"added-line count mismatch: {plus_count} '+' line(s) in hunks, {len(out)} scanned"
+        )
     return out
 
 
@@ -169,7 +213,7 @@ def binary_hit_paths(diff_text: str) -> list[str]:
     """
     paths: list[str] = []
     current: str | None = None
-    for line in diff_text.splitlines():
+    for line in _diff_lines(diff_text):
         m = _DIFF_GIT_RE.match(line)
         if m:
             b = _unquote_git_path(m.group(2))
@@ -266,7 +310,11 @@ def main(argv: list[str]) -> int:
     allow_file = Path(".leak-guard-allow")
     allow = parse_allow(allow_file.read_text(encoding="utf-8")) if allow_file.exists() else []
     if argv[:1] == ["--diff"]:
-        diff_text = Path(argv[1]).read_text(encoding="utf-8")
+        # Bytes, not read_text(): --text can force genuinely non-UTF-8 (binary)
+        # content into the diff stream, and Path.read_text(encoding="utf-8") would
+        # raise before the allowlist is even consulted. errors="replace" turns an
+        # invalid byte into U+FFFD -- a garbled scanned line, never a crash.
+        diff_text = Path(argv[1]).read_bytes().decode("utf-8", errors="replace")
         try:
             entries = added_lines(diff_text)
         except LeakGuardError as exc:
