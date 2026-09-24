@@ -84,6 +84,13 @@ def _disable_ssl_for_tests(monkeypatch):
     monkeypatch.setenv("MAILBOX_CLEANUP_SSL", "0")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sources_file(tmp_path, monkeypatch):
+    """No test may read the owner's real ~/.mailbox-cleanup/sources.json. Tests that need
+    a sources file set MAILBOX_CLEANUP_SOURCES themselves and override this default."""
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(tmp_path / "sources.json"))
+
+
 @pytest.fixture
 def seeded_mailbox(fresh_mailbox):
     """Seed INBOX with all fixture .eml files."""

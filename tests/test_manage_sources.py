@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -7,6 +8,7 @@ from mailbox_cleanup.manage.sources import (
     MarkdownFolderSource,
     SourceMissingError,
     load_sources,
+    sources_path,
 )
 
 
@@ -65,3 +67,11 @@ def test_sources_survive_account_config_rewrite(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
     assert json.loads(src.read_text())["folders"] == [str(overlays)]
     assert [s.name for s in load_sources()] == [str(overlays)]
+
+
+def test_missing_sources_file_means_no_sources():
+    assert load_sources() == []
+
+
+def test_tests_never_see_the_real_sources_file():
+    assert sources_path() != Path.home() / ".mailbox-cleanup" / "sources.json"
