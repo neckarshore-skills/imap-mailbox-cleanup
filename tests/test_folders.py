@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from mailbox_cleanup.folders import (
@@ -54,3 +55,41 @@ def test_resolve_unknown_returns_none():
     mb = MagicMock()
     mb.folder.list.return_value = folders
     assert resolve_folder(mb, "trash") is None
+
+
+class _FakeFolders:
+    def __init__(self, entries):
+        self._entries = entries
+
+    def list(self):
+        return [SimpleNamespace(name=n, flags=f) for n, f in self._entries]
+
+
+class _FakeMailbox:
+    def __init__(self, entries):
+        self.folder = _FakeFolders(entries)
+
+
+def test_drafts_resolved_by_special_use_flag():
+    mb = _FakeMailbox([("INBOX", ()), ("Entwurf-Ablage", ("\\Drafts",))])
+    assert resolve_folder(mb, "drafts") == "Entwurf-Ablage"
+
+
+def test_drafts_resolved_by_english_name():
+    mb = _FakeMailbox([("INBOX", ()), ("Drafts", ())])
+    assert resolve_folder(mb, "drafts") == "Drafts"
+
+
+def test_drafts_resolved_by_german_name():
+    mb = _FakeMailbox([("INBOX", ()), ("Entwürfe", ())])
+    assert resolve_folder(mb, "drafts") == "Entwürfe"
+
+
+def test_drafts_flag_beats_name():
+    mb = _FakeMailbox([("Drafts", ()), ("Other", ("\\Drafts",))])
+    assert resolve_folder(mb, "drafts") == "Other"
+
+
+def test_drafts_missing_returns_none():
+    mb = _FakeMailbox([("INBOX", ()), ("Sent", ("\\Sent",))])
+    assert resolve_folder(mb, "drafts") is None
