@@ -10,6 +10,7 @@ dependencies = [
     "click>=8.1",
     "imap-tools>=1.5",
     "keyring>=24.0",
+    "pyyaml>=6.0.3",
     "requests>=2.31",
 ]
 
