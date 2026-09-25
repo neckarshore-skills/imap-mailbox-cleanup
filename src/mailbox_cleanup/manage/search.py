@@ -252,7 +252,13 @@ def search(
     With server SORT (all filters ASCII), SORT preselects `limit + slack` UIDs; otherwise
     only the Date header and INTERNALDATE of every match are fetched. Either way the
     window is ordered here with the same key, and full headers are fetched only for the
-    top `limit`. `since` compares against the Date header (IMAP SENTSINCE)."""
+    top `limit`. `since` compares against the Date header (IMAP SENTSINCE).
+
+    Read-only by construction. The no-destructive guard
+    (tests/test_manage_no_destructive.py) is a spelling check that catches mistakes,
+    such as a copied destructive method call or IMAP command string; it is not a proof
+    against intent, since a command assembled at runtime passes it. Review stays the
+    gate."""
     bad = unsafe_arg_keys(folder=folder, sender=sender, subject=subject, text=text)
     if bad:
         raise ValueError(f"control characters in: {', '.join(bad)}")
