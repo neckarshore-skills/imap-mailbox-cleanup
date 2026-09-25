@@ -3,23 +3,24 @@ import json
 import pytest
 from click.testing import CliRunner
 
-from mailbox_cleanup.folders import resolve_folder
+from mailbox_cleanup.folders import SENT_FALLBACKS, resolve_folder
 from mailbox_cleanup.manage.read import read_message
 from mailbox_cleanup.manage.search import search
 from mailbox_cleanup.manage.thread import thread
 
 pytestmark = pytest.mark.integration
 
-# A References header carrying a quote-breaking id next to the real one (R4). Even though
-# imap_tools' own HEADER-search quoting already escapes embedded quotes, the allowlist in
-# thread._safe_ids strips such ids before they ever reach the server — defense in depth,
-# not reliance on that escaping.
+# A References header carrying a quote-breaking id (no internal whitespace, so it SURVIVES
+# read.parse_message_ids' loose extraction `<[^<>\s]+>` and actually reaches thread._safe_ids)
+# next to the real one (R4). thread._safe_ids' strict allowlist rejects it before it is ever
+# used as an IMAP search value — defense in depth on top of imap_tools' own HEADER-search
+# quoting, which would likely have neutralized it anyway.
 HOSTILE_REF = (
     b"From: buero@example.com\r\nTo: test@localhost\r\n"
     b"Subject: Re: Elternabend (hostile)\r\n"
     b"Date: Thu, 24 Sep 2026 08:00:00 +0200\r\n"
     b"Message-ID: <s4@example.com>\r\n"
-    b'References: <s1@example.com> <a"OR ALL"@x.example>\r\n'
+    b'References: <s1@example.com> <a"OR"ALL@x.example>\r\n'
     b"In-Reply-To: <s1@example.com>\r\n\r\n"
     b"hostile ref\r\n"
 )
@@ -96,19 +97,57 @@ def test_thread_ignores_a_quote_breaking_reference_id(manage_mailbox, open_mb, s
     assert "mira@example.org" not in {m.sender for m in msgs}  # did not fan out
 
 
+def _delete_folder_if_present(mb, name):
+    try:
+        mb.folder.delete(name)
+    except Exception:  # noqa: BLE001 — "no such folder" is the expected common case
+        pass
+
+
 def test_thread_has_no_sent_folder_on_greenmail_and_still_works(manage_mailbox, open_mb):
     """R6: measured on GreenMail 2.1.0 — `CREATE Sent (USE (\\Sent))` fails BAD (no
     CREATE-SPECIAL-USE support), and a plain `CREATE Sent` folder carries no flags, so
-    `folders.resolve_folder(mb, "sent")` (SPECIAL-USE only for "sent"; unlike trash/
-    archive/drafts it has no literal-name fallback) is always None here. The
-    crosses-into-Sent scenario is therefore not feasible to exercise against GreenMail
-    (see the task report); this documents that thread() still works correctly with only
-    the start folder searched."""
+    SPECIAL-USE alone never finds a Sent folder here. `folders.SENT_FALLBACKS` (added in
+    this fix round) now also looks for a literal folder named "Sent" etc. — so this test
+    defensively removes any such leftover folder first (a previous test creates one; see
+    `test_thread_crosses_into_a_manually_created_sent_folder` below) to demonstrate the
+    genuinely-no-Sent-folder case: `resolve_folder` returns None and thread() still works
+    correctly, searching only the start folder, no error."""
     with open_mb(manage_mailbox) as mb:
+        for name in SENT_FALLBACKS:
+            _delete_folder_if_present(mb, name)
         assert resolve_folder(mb, "sent") is None
         reply_uid = _uid_by_subject(mb, "buero@example.com", "Re: Elternabend")
         msgs = thread(mb, uid=reply_uid)
     assert [m.message_id for m in msgs] == ["<s1@example.com>", "<s2@example.com>"]
+
+
+def test_thread_crosses_into_a_manually_created_sent_folder(manage_mailbox, open_mb):
+    """R6 + SENT FALLBACK: GreenMail 2.1.0 has no CREATE-SPECIAL-USE support (see the test
+    above), but a PLAIN folder literally named "Sent" (no \\Sent flag) is now found via
+    `folders.SENT_FALLBACKS`, so thread() can search it. Test setup creates the folder and
+    appends into it directly with `mb.append` — test code may append; `src/` must not
+    (Global Constraint 5 guard) — and removes the folder again afterwards so it does not
+    leak into other tests or future runs of this long-lived GreenMail container."""
+    sent_reply = (
+        b"From: test@localhost\r\nTo: buero@example.com\r\n"
+        b"Subject: Re: Elternabend (sent copy)\r\n"
+        b"Date: Fri, 25 Sep 2026 08:00:00 +0200\r\n"
+        b"Message-ID: <sent1@example.com>\r\nIn-Reply-To: <s1@example.com>\r\n"
+        b"References: <s1@example.com>\r\n\r\nsent reply\r\n"
+    )
+    with open_mb(manage_mailbox) as mb:
+        _delete_folder_if_present(mb, "Sent")
+        mb.folder.create("Sent")
+        try:
+            mb.append(sent_reply, folder="Sent")
+            assert resolve_folder(mb, "sent") == "Sent"
+            reply_uid = _uid_by_subject(mb, "buero@example.com", "Re: Elternabend")
+            msgs = thread(mb, uid=reply_uid)
+        finally:
+            _delete_folder_if_present(mb, "Sent")
+    ids = {m.message_id for m in msgs}
+    assert ids == {"<s1@example.com>", "<s2@example.com>", "<sent1@example.com>"}
 
 
 def test_cli_read_escapes_a_hostile_body(manage_mailbox, open_mb, patch_account):

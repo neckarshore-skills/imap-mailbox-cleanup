@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from mailbox_cleanup.folders import (
     ARCHIVE_FALLBACKS,  # noqa: F401  (re-export contract)
+    SENT_FALLBACKS,  # noqa: F401  (re-export contract)
     TRASH_FALLBACKS,  # noqa: F401  (re-export contract)
     resolve_folder,
 )
@@ -93,3 +94,28 @@ def test_drafts_flag_beats_name():
 def test_drafts_missing_returns_none():
     mb = _FakeMailbox([("INBOX", ()), ("Sent", ("\\Sent",))])
     assert resolve_folder(mb, "drafts") is None
+
+
+def test_sent_resolved_via_special_use():
+    mb = _FakeMailbox([("INBOX", ()), ("Postausgang", ("\\Sent",))])
+    assert resolve_folder(mb, "sent") == "Postausgang"
+
+
+def test_sent_resolved_via_fallback_name():
+    mb = _FakeMailbox([("INBOX", ()), ("Sent", ())])
+    assert resolve_folder(mb, "sent") == "Sent"
+
+
+def test_sent_resolved_via_german_fallback_name():
+    mb = _FakeMailbox([("INBOX", ()), ("Gesendete Objekte", ())])
+    assert resolve_folder(mb, "sent") == "Gesendete Objekte"
+
+
+def test_sent_flag_beats_name():
+    mb = _FakeMailbox([("Sent", ()), ("Other", ("\\Sent",))])
+    assert resolve_folder(mb, "sent") == "Other"
+
+
+def test_sent_missing_returns_none():
+    mb = _FakeMailbox([("INBOX", ())])
+    assert resolve_folder(mb, "sent") is None

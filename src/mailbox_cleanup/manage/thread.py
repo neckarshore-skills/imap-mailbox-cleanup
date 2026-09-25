@@ -51,9 +51,16 @@ def _parse_date(date_str: str) -> datetime.datetime:
     return d if d.tzinfo else d.replace(tzinfo=datetime.UTC)
 
 
-def _by_header(mb, folder: str, header: str, value: str) -> list[Message]:
+def _by_header(mb, folder: str, header: str, value: str, *, exact: bool = False) -> list[Message]:
+    """IMAP HEADER search is a substring match (M1): a hostile mail whose own Message-ID
+    header is e.g. `<x@evil> <s1@example.com>` would otherwise match a Message-ID search
+    for `<s1@example.com>` even though it is not that message. `exact=True` (used for the
+    Message-ID search) keeps only results whose OWN message_id equals `value`. The
+    References search intentionally stays substring — a reply's References header
+    legitimately CONTAINS the ancestor id among others, that is how threads are found."""
     mb.folder.set(folder)
-    return [to_message(m, folder) for m in mb.fetch(AND(header=H(header, value)), mark_seen=False)]
+    msgs = [to_message(m, folder) for m in mb.fetch(AND(header=H(header, value)), mark_seen=False)]
+    return [m for m in msgs if not exact or m.message_id == value]
 
 
 def thread(mb, *, uid: str, folder: str = "INBOX") -> list[Message]:
@@ -83,7 +90,7 @@ def thread(mb, *, uid: str, folder: str = "INBOX") -> list[Message]:
     found: dict[str, Message] = {_dedupe_key(start): start}
     for f in folders:
         for mid in wanted:
-            for m in _by_header(mb, f, "Message-ID", mid):
+            for m in _by_header(mb, f, "Message-ID", mid, exact=True):
                 found.setdefault(_dedupe_key(m), m)
         if root:
             for m in _by_header(mb, f, "References", root):

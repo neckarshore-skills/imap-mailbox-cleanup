@@ -17,9 +17,9 @@ from ..config import Account
 from ..imap_client import imap_connect
 from .args import unsafe_arg_keys
 from .envelope import wrap
-from .read import _MSGID_RE, _UID_RE, Message, read_message
+from .read import _UID_RE, Message, read_message
 from .search import search
-from .thread import thread
+from .thread import _SAFE_MSGID_RE, thread
 
 
 def _out(payload: dict) -> None:
@@ -151,14 +151,22 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
     )
 
 
+_MAX_MESSAGE_ID_LEN = 250
+
+
 def _safe_message_id(mid: str) -> str:
     """`message_id` sits outside the envelope alongside `uid`/`folder` because Task 7
-    threads replies off it, but unlike those it is mail-derived (R9): it comes straight
-    off the Message-ID header. Validated against the same shape read.parse_message_ids
-    extracts with (`<...>`, no internal `<`, `>` or whitespace) rather than wrapped; a
-    header that does not match becomes an empty string instead of leaking whatever a
-    hostile mail put there."""
-    return mid if _MSGID_RE.fullmatch(mid) else ""
+    threads replies off it, but unlike those it is mail-derived (R9/M3): it comes straight
+    off the Message-ID header. Validated against `thread._SAFE_MSGID_RE` — the SAME strict
+    allowlist used before a Message-ID reaches IMAP as a search value (`<...>` with no
+    `"`, `\\`, `(`, `)`, `*`, space or control character), not the looser extraction shape
+    `read._MSGID_RE` — plus a length cap, since a mail can put arbitrary-length junk in its
+    Message-ID header and this field is emitted as a bare JSON string outside
+    <mail-content>. A value that fails either check becomes an empty string instead of
+    leaking whatever a hostile mail put there."""
+    if len(mid) > _MAX_MESSAGE_ID_LEN:
+        return ""
+    return mid if _SAFE_MSGID_RE.fullmatch(mid) else ""
 
 
 def _message_json(m: Message) -> dict:
@@ -231,6 +239,13 @@ def thread_cmd(account_flag, folder, uid, json_mode):
             code="operation_error",
             message=f"IMAP operation failed ({type(e).__name__})",
             exit_code=2,
+        )
+    if not msgs:
+        # thread() returns [] ONLY when the start UID does not exist (read_message finds
+        # nothing): whenever a start message IS found, it is always included in the
+        # result, so an empty list is an unambiguous not_found signal here (M5).
+        _fail_audited(
+            **fail, code="not_found", message=f"no message with UID {uid} in {folder}", exit_code=1
         )
     log_manage_action(
         subcommand="manage.thread",

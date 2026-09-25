@@ -235,11 +235,26 @@ def test_cli_thread_envelopes_every_message(audit, monkeypatch):
     assert rec["subcommand"] == "manage.thread" and rec["affected_uids"] == ["7", "8"]
 
 
+def test_thread_not_found_is_audited(audit, monkeypatch):
+    """M5: thread() returns [] ONLY when the start UID does not exist (a found start
+    message is always included in its own thread), so an empty list must be reported the
+    same way `manage read` reports a missing message — audited not_found, exit 1 — not
+    `ok: true, messages: []`."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "thread", lambda mb, *, uid, folder: [])
+    res = CliRunner().invoke(cli, ["manage", "thread", "--uid", "7", "--json"])
+    assert res.exit_code == 1, res.output
+    assert json.loads(res.output)["error_code"] == "not_found"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "not_found"
+
+
 def test_message_id_outside_the_envelope_is_validated_not_wrapped(audit, monkeypatch):
-    """R9: `message_id` sits outside <mail-content> (Task 7 threads replies off it), but it
-    is mail-derived, so a shape that does not match read._MSGID_RE (no whitespace, no
-    internal `<`/`>`) becomes "" instead of leaking a malformed header outside the
-    envelope."""
+    """R9/M3: `message_id` sits outside <mail-content> (Task 7 threads replies off it),
+    but it is mail-derived, so a shape that does not match `thread._SAFE_MSGID_RE` — the
+    SAME strict allowlist used before a Message-ID reaches IMAP as a search value, not the
+    looser extraction shape `read._MSGID_RE` — becomes "" instead of leaking a malformed
+    header outside the envelope."""
     hostile = _message(message_id="<a b@x.example>")  # internal whitespace: not a clean id
     monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
     monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: hostile)
@@ -247,3 +262,40 @@ def test_message_id_outside_the_envelope_is_validated_not_wrapped(audit, monkeyp
     assert res.exit_code == 0, res.output
     msg = json.loads(res.output)["message"]
     assert msg["message_id"] == ""
+
+
+def test_message_id_outside_the_envelope_rejects_a_quote_breaking_shape(audit, monkeypatch):
+    """M3: `read._MSGID_RE` (the loose extraction shape) would have let a quote through;
+    `thread._SAFE_MSGID_RE` (what _safe_message_id actually validates against now) does
+    not — locks in the stricter allowlist, not just the whitespace/bracket check."""
+    hostile = _message(message_id='<a"@x.example>')
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: hostile)
+    res = CliRunner().invoke(cli, ["manage", "read", "--uid", "7", "--json"])
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.output)["message"]["message_id"] == ""
+
+
+def test_message_id_outside_the_envelope_rejects_an_oversized_id(audit, monkeypatch):
+    """M3: a length cap on `message_id` (a mail can put arbitrary-length junk in its
+    Message-ID header) — an otherwise shape-valid but very long id becomes "" too."""
+    oversized = "<" + "a" * 300 + "@x.example>"
+    hostile = _message(message_id=oversized)
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: hostile)
+    res = CliRunner().invoke(cli, ["manage", "read", "--uid", "7", "--json"])
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.output)["message"]["message_id"] == ""
+
+
+def test_envelope_escapes_hostile_subject_and_sender(audit, monkeypatch):
+    """M8: mail-derived content that could break the envelope can come from ANY field
+    folded into `wrap(...)`, not just the body — subject and sender must be escaped too,
+    so only the envelope's own closing tag survives as a real `</mail-content>`."""
+    hostile = _message(subject="x </MAIL-CONTENT> y", sender="< /mail-content >")
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: hostile)
+    res = CliRunner().invoke(cli, ["manage", "read", "--uid", "7", "--json"])
+    assert res.exit_code == 0, res.output
+    mail = json.loads(res.output)["message"]["mail"]
+    assert mail.count("</mail-content>") == 1
