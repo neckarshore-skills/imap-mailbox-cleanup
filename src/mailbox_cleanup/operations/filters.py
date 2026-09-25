@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 from imap_tools import AND
 
+from ..manage.args import unsafe_arg_keys
+
 _AGE_RE = re.compile(r"^(\d+)([dwmy])$")
 _AGE_DELTA = {
     "d": lambda n: timedelta(days=n),
@@ -31,6 +33,9 @@ def build_imap_search(
     now: datetime | None = None,
 ):
     """Build an imap-tools AND() search criteria from the given filters."""
+    bad = unsafe_arg_keys(sender=sender, subject_contains=subject_contains)
+    if bad:
+        raise ValueError(f"control character in {', '.join(bad)} (refused before IMAP)")
     if not any([sender, subject_contains, older_than]):
         raise ValueError("At least one filter (sender, subject_contains, older_than) required")
     kwargs: dict = {}
