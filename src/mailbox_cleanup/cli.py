@@ -26,6 +26,7 @@ from .config import (
 )
 from .folders import resolve_folder
 from .imap_client import imap_connect
+from .manage.args import unsafe_arg_keys
 from .manage.cli import manage as _manage_group
 from .operations.archive import run_archive
 from .operations.attachments import run_attachments
@@ -39,6 +40,17 @@ from .operations.unsubscribe import (
     perform_unsubscribe,
 )
 from .scan import build_report
+
+
+def _no_control(ctx, param, value):
+    """Click callback: refuse control characters in a value that reaches IMAP.
+
+    imap_tools escapes only `\\` and `"`; a CR/LF would end the IMAP command line and let
+    the rest run as a new command (for these commands: a smuggled DELETE or MOVE).
+    """
+    if value is not None and unsafe_arg_keys(value=value):
+        raise click.BadParameter("contains a control character (refused before connecting)")
+    return value
 
 
 def _emit(payload: dict, json_mode: bool) -> None:
@@ -365,7 +377,7 @@ def config_remove(alias: str):
 @cli.command("scan")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--json", "json_mode", is_flag=True)
 def scan_cmd(account_flag, email_flag, folder: str, json_mode: bool):
     """Scan a folder, classify messages, emit a discovery report."""
@@ -401,7 +413,7 @@ def scan_cmd(account_flag, email_flag, folder: str, json_mode: bool):
 @cli.command("senders")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--top", default=50, show_default=True, type=int)
 @click.option("--json", "json_mode", is_flag=True)
 def senders_cmd(account_flag, email_flag, folder: str, top: int, json_mode: bool):
@@ -455,9 +467,9 @@ def _require_filter(sender, subject_contains, older_than, json_mode):
 @cli.command("delete")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
-@click.option("--sender", default=None)
-@click.option("--subject-contains", default=None)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
+@click.option("--sender", default=None, callback=_no_control)
+@click.option("--subject-contains", default=None, callback=_no_control)
 @click.option("--older-than", default=None, help="e.g. 30d, 2w, 3m, 1y")
 @click.option("--limit", default=None, type=int)
 @click.option(
@@ -538,10 +550,10 @@ def delete_cmd(
 @cli.command("move")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
-@click.option("--to", "target", required=True, help="Destination folder.")
-@click.option("--sender", default=None)
-@click.option("--subject-contains", default=None)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
+@click.option("--to", "target", required=True, help="Destination folder.", callback=_no_control)
+@click.option("--sender", default=None, callback=_no_control)
+@click.option("--subject-contains", default=None, callback=_no_control)
 @click.option("--older-than", default=None)
 @click.option("--limit", default=None, type=int)
 @click.option("--apply", is_flag=True)
@@ -621,7 +633,7 @@ def move_cmd(
 @cli.command("archive")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--older-than", required=True, help="e.g. 12m, 2y")
 @click.option("--apply", is_flag=True)
 @click.option("--json", "json_mode", is_flag=True)
@@ -675,7 +687,7 @@ def archive_cmd(account_flag, email_flag, folder, older_than, apply, json_mode):
 @cli.command("dedupe")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--apply", is_flag=True)
 @click.option("--json", "json_mode", is_flag=True)
 def dedupe_cmd(account_flag, email_flag, folder, apply, json_mode):
@@ -727,7 +739,7 @@ def dedupe_cmd(account_flag, email_flag, folder, apply, json_mode):
 @cli.command("attachments")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--size-gt", default="10mb", show_default=True)
 @click.option("--older-than", default=None)
 @click.option("--json", "json_mode", is_flag=True)
@@ -773,8 +785,8 @@ def attachments_cmd(account_flag, email_flag, folder, size_gt, older_than, json_
 @cli.command("unsubscribe")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
-@click.option("--sender", required=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
+@click.option("--sender", required=True, callback=_no_control)
 @click.option("--apply", is_flag=True)
 @click.option("--json", "json_mode", is_flag=True)
 def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
@@ -865,7 +877,7 @@ def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
 @cli.command("bounces")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
-@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--apply", is_flag=True)
 @click.option("--json", "json_mode", is_flag=True)
 def bounces_cmd(account_flag, email_flag, folder, apply, json_mode):
