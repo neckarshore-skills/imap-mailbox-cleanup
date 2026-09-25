@@ -102,6 +102,7 @@ REVIEW_BLOCK = [
 REVIEW_ALLOW = [
     "git commit -m \"$(cat <<'EOF'\ndrop smtplib from unsubscribe\nEOF\n)\"",
     'git commit -m "remove the send path\n\nsmtplib and sendmail are gone"',
+    'git commit -m "quote \\" here\nsmtplib is gone \\" end"',
 ]
 
 
