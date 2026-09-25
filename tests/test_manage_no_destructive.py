@@ -12,6 +12,9 @@ FORBIDDEN = [
     r"\\Deleted",
     r"DELETED",  # MailMessageFlags.DELETED
     r"operations\.(delete|move|archive|dedupe|attachments|bounces)",
+    # raw IMAP commands passed as strings, e.g. client.uid("MOVE", ...) or a wrapper
+    r"""["'](?i:move|store|expunge)["']""",
+    r"(?i)[+-]FLAGS",
 ]
 
 
