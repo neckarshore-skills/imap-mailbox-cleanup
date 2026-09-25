@@ -103,7 +103,7 @@ Replace `<ACCOUNT>` with the chosen alias (or omit the `--account` flag when onl
 | "Wer schickt am meisten?" | `mailbox-cleanup senders --account=<ACCOUNT> --top 20 --json` |
 | "Lösch alles von X" | `mailbox-cleanup delete --account=<ACCOUNT> --sender X --json` (then `--apply`) |
 | "Alles älter als 1 Jahr archivieren" | `mailbox-cleanup archive --account=<ACCOUNT> --older-than 12m --json` |
-| "Vom Newsletter X abmelden" | `mailbox-cleanup unsubscribe --account=<ACCOUNT> --sender X --json` |
+| "Vom Newsletter X abmelden" | `mailbox-cleanup unsubscribe --account=<ACCOUNT> --sender X --json` (HTTPS one-click only; `mailto:`-only senders come back under `manual_unsubscribe` for the user to unsubscribe by hand, their mail is kept) |
 | "Bounces wegräumen" | `mailbox-cleanup bounces --account=<ACCOUNT> --json` |
 | "Duplikate finden" | `mailbox-cleanup dedupe --account=<ACCOUNT> --json` |
 | "Große Anhänge zeigen" | `mailbox-cleanup attachments --account=<ACCOUNT> --size-gt 10mb --json` |

@@ -208,7 +208,7 @@ If only one account is configured, `--account` can be omitted.
 | `delete` | Soft-delete (move to Trash) by filter | one of `--sender=` / `--subject-contains=` / `--older-than=` | yes |
 | `move` | Move by filter to target folder | `--from-filter=...`, `--to=Folder` | yes |
 | `archive` | Bulk-move messages older than N → `Archive/YYYY` | `--older-than=12m` | yes |
-| `unsubscribe` | Parse `List-Unsubscribe` header, execute (HTTPS POST or `mailto:` SMTP) | `--sender=` | yes |
+| `unsubscribe` | Parse `List-Unsubscribe` header, execute HTTPS one-click only; `mailto:`-only senders are listed under `manual_unsubscribe` and their mail is kept (the package sends no mail) | `--sender=` | yes |
 | `dedupe` | Drop Message-ID duplicates, keep oldest | `--folder=` | yes |
 | `attachments` | List large messages (v1) — strip is v2 | `--size-gt=10mb` | n/a (read-only v1) |
 | `bounces` | Find bounce / auto-reply messages | `--folder=INBOX` | yes |
