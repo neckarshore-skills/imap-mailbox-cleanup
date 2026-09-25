@@ -196,7 +196,7 @@ def test_thread_message_id_search_is_exact_not_substring(monkeypatch):
     start = _msg("1", "INBOX", "<a@x.example>")
     # A different mail whose Message-ID header a NAIVE substring HEADER search for
     # "<a@x.example>" would also match, but it is not the message we searched for.
-    decoy = _msg("2", "INBOX", "<a@x.example.evil>")
+    decoy = _msg("2", "INBOX", "<a@x.example.org>")
     mb = _HeaderAwareFakeMb(start, message_id_hits=[start, decoy], references_hits=[])
     monkeypatch.setattr(thread_mod, "resolve_folder", lambda mb, kind: None)
     monkeypatch.setattr(thread_mod, "read_message", lambda mb, *, uid, folder: start)
