@@ -21,8 +21,13 @@ _CHUNK = 500  # UIDs per FETCH; with range collapse every command line stays sho
 _SORT_SLACK = 50
 _KEY_PART = "BODY.PEEK[HEADER.FIELDS (DATE)]"
 _HEAD_PART = "BODY.PEEK[HEADER]"
-_UID_RE = re.compile(rb"\bUID (\d+)")
-_INTERNALDATE_RE = re.compile(rb'INTERNALDATE "([^"]+)"')
+# Item names are anchored to "(" or whitespace so X-GM-UID cannot supply the UID, and
+# quoted strings are removed before matching so a header value cannot either.
+_UID_RE = re.compile(rb"(?:\(|\s)UID (\d+)")
+_INTERNALDATE_RE = re.compile(rb'(?:\(|\s)INTERNALDATE "([^"]+)"')
+_QUOTED_RE = re.compile(rb'"(?:[^"\\]|\\.)*"')
+_BODY_QUOTED_RE = re.compile(rb'(?:\(|\s)BODY\[[^\]]*\] ("(?:[^"\\]|\\.)*"|NIL)', re.IGNORECASE)
+_BODY_ITEM_RE = re.compile(rb"(?:\(|\s)BODY\[", re.IGNORECASE)
 _FETCH_START_RE = re.compile(rb"^\d+ \(")
 _MONTHS = {
     m: i
@@ -46,6 +51,7 @@ class _Row:
     uid: str
     arrived: datetime.datetime | None  # INTERNALDATE
     header: bytes  # the fetched header block (Date only, or the full header)
+    has_header: bool = True  # whether the server sent the BODY[...] item at all
 
 
 def uid_set(uids) -> str:
@@ -123,37 +129,71 @@ def _uid_list(data) -> list[str]:
     return data[0].decode().split() if data and data[0] else []
 
 
-def _parse_fetch(data) -> list[_Row]:
-    records: list[list[bytes]] = []
+def _records(data) -> list[tuple[bytes, bytes | None]]:
+    """imaplib's FETCH data as (meta, literal) pairs; literal is None when absent."""
+    records: list[list] = []
     for item in data:
         if isinstance(item, tuple):
             records.append([item[0], item[1] or b""])
         elif isinstance(item, bytes):
             if _FETCH_START_RE.match(item):
-                records.append([item, b""])  # a response without a literal
+                records.append([item, None])  # a response without a literal
             elif records:
                 records[-1][0] += item  # items after the literal, e.g. b" UID 5)"
-    rows = []
-    for meta, body in records:
-        uid = _UID_RE.search(meta)
-        if not uid:
+    return [(meta, lit) for meta, lit in records]
+
+
+def _parse_fetch(data, wanted: set[str]) -> list[_Row]:
+    """Rows for the UIDs we asked for, one per UID.
+
+    - Records for UIDs outside `wanted` are dropped: servers may send unsolicited FETCH
+      responses (another client changing flags) during any command.
+    - Several records for one UID are merged: for each item the FIRST non-empty value
+      wins, so a later flags-only record cannot blank an earlier header.
+    """
+    merged: dict[str, dict] = {}
+    for meta, literal in _records(data):
+        header_item = None
+        if literal is not None and _BODY_ITEM_RE.search(meta):
+            header_item = literal
+        else:
+            quoted = _BODY_QUOTED_RE.search(meta)
+            if quoted:
+                value = quoted.group(1)
+                header_item = b"" if value.upper() == b"NIL" else _unquote(value)
+        bare = _QUOTED_RE.sub(b'""', meta)
+        uid_m = _UID_RE.search(bare)
+        if not uid_m or uid_m.group(1).decode() not in wanted:
             continue
+        uid = uid_m.group(1).decode()
         idate = _INTERNALDATE_RE.search(meta)
-        rows.append(
-            _Row(
-                uid=uid.group(1).decode(),
-                arrived=_parse_internaldate(idate.group(1)) if idate else None,
-                header=body,
-            )
+        arrived = _parse_internaldate(idate.group(1)) if idate else None
+        rec = merged.setdefault(uid, {"arrived": None, "header": None})
+        if rec["arrived"] is None:
+            rec["arrived"] = arrived
+        if header_item is not None and not rec["header"]:
+            rec["header"] = header_item
+    return [
+        _Row(
+            uid=uid,
+            arrived=rec["arrived"],
+            header=rec["header"] or b"",
+            has_header=rec["header"] is not None,
         )
-    return rows
+        for uid, rec in merged.items()
+    ]
+
+
+def _unquote(value: bytes) -> bytes:
+    return re.sub(rb"\\(.)", rb"\1", value[1:-1])
 
 
 def _fetch(mb, uids: list[str], part: str) -> list[_Row]:
     rows: list[_Row] = []
     for i in range(0, len(uids), _CHUNK):
         chunk = uids[i : i + _CHUNK]
-        rows += _parse_fetch(_uid_cmd(mb, "FETCH", uid_set(chunk), f"(UID INTERNALDATE {part})"))
+        data = _uid_cmd(mb, "FETCH", uid_set(chunk), f"(UID INTERNALDATE {part})")
+        rows += _parse_fetch(data, set(chunk))
     return rows
 
 
@@ -232,7 +272,7 @@ def search(
     candidates = []
     for key_row in top:
         row = full.get(key_row.uid)
-        if row is None:  # expunged between the two fetches
+        if row is None or not row.has_header:  # expunged meanwhile, or header never sent
             continue
         msg = MailMessage.from_bytes(row.header)
         d = _sort_date(row)
