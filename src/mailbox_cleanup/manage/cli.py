@@ -15,6 +15,7 @@ from ..auth import AuthMissingError
 from ..cli_helpers import AccountFlagsError, resolve_account_and_credentials
 from ..config import Account
 from ..imap_client import imap_connect
+from .args import unsafe_arg_keys
 from .envelope import wrap
 from .search import search
 
@@ -63,6 +64,20 @@ def _resolve(account_flag):
         _fail("auth_missing", str(e), 3)
 
 
+def _reject_control_chars(fail: dict, **values: str | None) -> None:
+    """Audited `bad_args` before any IMAP call when a value carries a control character.
+    The message names the fields, never the values."""
+    bad = unsafe_arg_keys(**values)
+    if bad:
+        fields = ", ".join(f"--{k}" for k in bad)
+        _fail_audited(
+            **{**fail, "folder": "" if "folder" in bad else fail["folder"]},
+            code="bad_args",
+            message=f"control characters are not allowed in {fields}",
+            exit_code=4,
+        )
+
+
 def _arg_keys(**given) -> list[str]:
     return [k for k, v in given.items() if v]
 
@@ -85,6 +100,7 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
     account, creds = _resolve(account_flag)
     keys = _arg_keys(sender=sender, subject=subject, text=text, since=since)
     fail = dict(subcommand="manage.search", account=account, folder=folder, arg_keys=keys)
+    _reject_control_chars(fail, folder=folder, sender=sender, subject=subject, text=text)
     try:
         since_d = datetime.date.fromisoformat(since) if since else None
     except ValueError:

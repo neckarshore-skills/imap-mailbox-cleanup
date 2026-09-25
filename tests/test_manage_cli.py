@@ -99,3 +99,27 @@ def test_hostile_sender_and_subject_stay_escaped(audit, monkeypatch):
         for c in cands:
             outside = {k: v for k, v in c.items() if k != "mail"}
             assert s not in json.dumps(outside) and subj not in json.dumps(outside)
+
+
+@pytest.mark.parametrize("field", ["--sender", "--subject", "--text", "--folder"])
+@pytest.mark.parametrize(
+    "value", ["x\r\nZ1 CREATE INJECTED\r\nZ2 NOOP", "x\x00y", "x\ty", "x\x7fy"]
+)
+def test_control_characters_are_rejected_before_any_imap_call(audit, monkeypatch, field, value):
+    connects = []
+
+    def _record(creds, *, port=993):
+        connects.append(port)
+        raise AssertionError("imap_connect must not be reached")
+
+    monkeypatch.setattr(mcli, "imap_connect", _record)
+    res = CliRunner().invoke(cli, ["manage", "search", field, value, "--json"])
+    assert res.exit_code == 4, res.output
+    out = json.loads(res.output)
+    assert out["error_code"] == "bad_args"
+    assert field.lstrip("-") in out["message"]
+    assert value not in res.output
+    assert connects == []
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+    assert value not in audit.read_text(encoding="utf-8")

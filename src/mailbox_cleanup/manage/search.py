@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from imap_tools import AND
 
+from .args import unsafe_arg_keys
+
 # imap_tools' default for an unparseable Date header; treated as "no date".
 _UNPARSED = datetime.datetime(1900, 1, 1)
 _NO_DATE = datetime.datetime.min.replace(tzinfo=datetime.UTC)
@@ -97,6 +99,9 @@ def search(
     """Candidates only — never bodies (spec §3 unit 1). Newest first by message Date.
 
     `since` compares against the Date header (IMAP SENTSINCE), like the ordering."""
+    bad = unsafe_arg_keys(folder=folder, sender=sender, subject=subject, text=text)
+    if bad:
+        raise ValueError(f"control characters in: {', '.join(bad)}")
     mb.folder.set(folder)
     base, literals = _criteria(sender, subject, text, since)
     if not literals and "SORT" in mb.client.capabilities:
