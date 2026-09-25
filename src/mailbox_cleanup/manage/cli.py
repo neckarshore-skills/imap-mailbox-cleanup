@@ -17,7 +17,9 @@ from ..config import Account
 from ..imap_client import imap_connect
 from .args import unsafe_arg_keys
 from .envelope import wrap
+from .read import _UID_RE, Message, read_message
 from .search import search
+from .thread import _SAFE_MSGID_RE, thread
 
 
 def _out(payload: dict) -> None:
@@ -145,5 +147,118 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
                 }
                 for h in hits
             ],
+        }
+    )
+
+
+_MAX_MESSAGE_ID_LEN = 250
+
+
+def _safe_message_id(mid: str) -> str:
+    """`message_id` sits outside the envelope alongside `uid`/`folder` because Task 7
+    threads replies off it, but unlike those it is mail-derived (R9/M3): it comes straight
+    off the Message-ID header. Validated against `thread._SAFE_MSGID_RE` — the SAME strict
+    allowlist used before a Message-ID reaches IMAP as a search value (`<...>` with no
+    `"`, `\\`, `(`, `)`, `*`, space or control character), not the looser extraction shape
+    `read._MSGID_RE` — plus a length cap, since a mail can put arbitrary-length junk in its
+    Message-ID header and this field is emitted as a bare JSON string outside
+    <mail-content>. A value that fails either check becomes an empty string instead of
+    leaking whatever a hostile mail put there."""
+    if len(mid) > _MAX_MESSAGE_ID_LEN:
+        return ""
+    return mid if _SAFE_MSGID_RE.fullmatch(mid) else ""
+
+
+def _message_json(m: Message) -> dict:
+    head = f"From: {m.sender}\nTo: {', '.join(m.to)}\nSubject: {m.subject}\nDate: {m.date}"
+    return {
+        "uid": m.uid,
+        "folder": m.folder,
+        "message_id": _safe_message_id(m.message_id),
+        "mail": wrap(f"{head}\n\n{m.text}"),
+    }
+
+
+@manage.command("read")
+@click.option("--account", "account_flag", default=None)
+@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--uid", required=True)
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def read_cmd(account_flag, folder, uid, json_mode):
+    account, creds = _resolve(account_flag)
+    fail = dict(subcommand="manage.read", account=account, folder=folder, arg_keys=["uid"])
+    _reject_control_chars(fail, folder=folder)
+    if not _UID_RE.fullmatch(uid):
+        _fail_audited(
+            **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
+        )
+    try:
+        with imap_connect(creds, port=account.port) as mb:
+            m = read_message(mb, uid=uid, folder=folder)
+    except Exception as e:  # never str(e): server text can echo mail content
+        _fail_audited(
+            **fail,
+            code="operation_error",
+            message=f"IMAP operation failed ({type(e).__name__})",
+            exit_code=2,
+        )
+    if m is None:
+        _fail_audited(
+            **fail, code="not_found", message=f"no message with UID {uid} in {folder}", exit_code=1
+        )
+    log_manage_action(
+        subcommand="manage.read",
+        account=account.alias,
+        folder=folder,
+        uids=[uid],
+        result="success",
+        arg_keys=["uid"],
+    )
+    _out({"ok": True, "subcommand": "manage.read", "message": _message_json(m)})
+
+
+@manage.command("thread")
+@click.option("--account", "account_flag", default=None)
+@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--uid", required=True)
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def thread_cmd(account_flag, folder, uid, json_mode):
+    account, creds = _resolve(account_flag)
+    fail = dict(subcommand="manage.thread", account=account, folder=folder, arg_keys=["uid"])
+    _reject_control_chars(fail, folder=folder)
+    if not _UID_RE.fullmatch(uid):
+        _fail_audited(
+            **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
+        )
+    try:
+        with imap_connect(creds, port=account.port) as mb:
+            msgs = thread(mb, uid=uid, folder=folder)
+    except Exception as e:  # never str(e): server text can echo mail content
+        _fail_audited(
+            **fail,
+            code="operation_error",
+            message=f"IMAP operation failed ({type(e).__name__})",
+            exit_code=2,
+        )
+    if not msgs:
+        # thread() returns [] ONLY when the start UID does not exist (read_message finds
+        # nothing): whenever a start message IS found, it is always included in the
+        # result, so an empty list is an unambiguous not_found signal here (M5).
+        _fail_audited(
+            **fail, code="not_found", message=f"no message with UID {uid} in {folder}", exit_code=1
+        )
+    log_manage_action(
+        subcommand="manage.thread",
+        account=account.alias,
+        folder=folder,
+        uids=[m.uid for m in msgs],
+        result="success",
+        arg_keys=["uid"],
+    )
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.thread",
+            "messages": [_message_json(m) for m in msgs],
         }
     )

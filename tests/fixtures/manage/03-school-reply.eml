@@ -1,0 +1,10 @@
+From: Schulbuero <buero@example.com>
+To: test@localhost
+Subject: Re: Elternabend
+Date: Wed, 23 Sep 2026 08:00:00 +0200
+Message-ID: <s2@example.com>
+In-Reply-To: <s1@example.com>
+References: <s1@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Nachtrag: Beginn 19 Uhr.
