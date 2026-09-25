@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from mailbox_cleanup.audit import AUDIT_LOG_PATH_ENV, log_action
+from mailbox_cleanup.audit import AUDIT_LOG_PATH_ENV, log_action, log_manage_action
 
 
 @pytest.fixture
@@ -86,3 +86,20 @@ def test_log_action_account_field_position(tmp_audit):
     rec = json.loads(tmp_audit.read_text().strip())
     assert rec["account"] == "work"
     assert rec["subcommand"] == "bounces"
+
+
+def test_manage_record_has_no_args(tmp_path, monkeypatch):
+    log = tmp_path / "audit.log"
+    monkeypatch.setenv("MAILBOX_CLEANUP_AUDIT_LOG", str(log))
+    log_manage_action(
+        subcommand="manage.search",
+        account="t",
+        folder="INBOX",
+        uids=["1", "2"],
+        result="success",
+        arg_keys=["sender", "subject"],
+    )
+    rec = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    assert "args" not in rec
+    assert rec["arg_keys"] == ["sender", "subject"]
+    assert rec["affected_uids"] == ["1", "2"]
