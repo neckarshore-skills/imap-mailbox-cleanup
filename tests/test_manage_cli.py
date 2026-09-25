@@ -46,7 +46,10 @@ def test_failed_search_writes_error_record_with_code_only(audit, monkeypatch):
     monkeypatch.setattr(mcli, "imap_connect", _boom)
     res = CliRunner().invoke(cli, ["manage", "search", "--sender", SENTINEL, "--json"])
     assert res.exit_code == 2, res.output
-    assert json.loads(res.output)["error_code"] == "operation_error"
+    out = json.loads(res.output)
+    assert out["error_code"] == "operation_error"
+    assert SENTINEL not in res.output  # the output message never echoes str(e)
+    assert "RuntimeError" in out["message"]
     (rec,) = _records(audit)
     assert rec["subcommand"] == "manage.search"
     assert rec["result"] == "error"

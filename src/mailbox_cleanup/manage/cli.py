@@ -117,7 +117,13 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
                 limit=limit,
             )
     except Exception as e:  # surfaced as a structured error; the audit keeps the code only
-        _fail_audited(**fail, code="operation_error", message=str(e), exit_code=2)
+        # Never str(e): server text can echo search values or mail content.
+        _fail_audited(
+            **fail,
+            code="operation_error",
+            message=f"IMAP operation failed ({type(e).__name__})",
+            exit_code=2,
+        )
     log_manage_action(
         subcommand="manage.search",
         account=account.alias,
