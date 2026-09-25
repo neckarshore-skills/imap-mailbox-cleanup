@@ -777,7 +777,10 @@ def attachments_cmd(account_flag, email_flag, folder, size_gt, older_than, json_
 @click.option("--apply", is_flag=True)
 @click.option("--json", "json_mode", is_flag=True)
 def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
-    """Parse List-Unsubscribe header for sender, optionally execute (HTTPS or mailto)."""
+    """Parse List-Unsubscribe for sender; optionally run HTTPS one-click.
+
+    mailto-only senders are listed under manual_unsubscribe and their mail is kept.
+    """
     try:
         account, creds = resolve_account_and_credentials(
             account_flag=account_flag, email_flag=email_flag
@@ -788,26 +791,29 @@ def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
     except AuthMissingError as e:
         _fail({"error_code": "auth_missing", "message": str(e)}, 3, json_mode)
         return
+    uids: list[str] = []
+    actions: list[dict] = []
+    results: list[dict] = []
+    manual: list[str] = []
     try:
         with imap_connect(creds, port=account.port) as mb:
             data = collect_unsub_targets(mb, sender=sender, folder=folder)
             uids = data["uids"]
             actions = data["actions"]
-            results: list[dict] = []
+            https_actions = [a for a in actions if a["kind"] == "https"]
+            if not https_actions:
+                manual = [a["target"] for a in actions if a["kind"] == "mailto"]
             if apply:
-                # Take the first (preferred) action — already sorted https-first
-                if actions:
-                    a = UnsubAction(**{k: actions[0][k] for k in ("kind", "target", "one_click")})
-                    ok, info = perform_unsubscribe(
-                        a,
-                        smtp_sender=creds.email,
-                        smtp_password=creds.password,
-                    )
-                    results.append({"action": actions[0], "ok": ok, "info": info})
-                # Move matching messages to Trash regardless of unsubscribe success
-                trash = resolve_folder(mb, "trash")
-                if trash and uids:
-                    mb.move(uids, trash)
+                if https_actions:
+                    first = https_actions[0]
+                    a = UnsubAction(**{k: first[k] for k in ("kind", "target", "one_click")})
+                    ok, info = perform_unsubscribe(a)
+                    results.append({"action": first, "ok": ok, "info": info})
+                # (b) and (c): move to Trash as before. (a) mailto-only: keep the mail.
+                if not manual:
+                    trash = resolve_folder(mb, "trash")
+                    if trash and uids:
+                        mb.move(uids, trash)
     except Exception as e:
         _fail({"error_code": "operation_error", "message": str(e)}, 2, json_mode)
         return
@@ -821,24 +827,38 @@ def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
         "matching_count": len(uids),
         "actions": actions,
         "results": results,
+        "manual_unsubscribe": manual,
     }
     if apply:
+        if manual:
+            result = "manual"
+        elif not results or results[0]["ok"]:
+            result = "success"
+        else:
+            result = "partial"
         log_action(
             subcommand="unsubscribe",
             account=account.alias,
             args={"sender": sender},
             folder=folder,
-            affected_uids=uids,
-            result="success" if not results or results[0]["ok"] else "partial",
+            affected_uids=[] if manual else uids,
+            result=result,
         )
     if json_mode:
         click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        verb = "Performed" if apply else "Would attempt"
-        click.echo(
-            f"{verb} unsubscribe for {sender}: "
-            f"{len(actions)} action(s) found, {len(uids)} matching messages"
-        )
+        counts = f"{len(actions)} action(s) found, {len(uids)} matching messages"
+        if apply and manual:
+            click.echo(f"No unsubscribe performed for {sender}, all mail kept: {counts}")
+        elif apply and results and not results[0]["ok"]:
+            click.echo(f"Unsubscribe FAILED for {sender} ({results[0]['info']}): {counts}")
+        elif manual:
+            click.echo(f"No automatic unsubscribe available for {sender}: {counts}")
+        else:
+            verb = "Performed" if apply else "Would attempt"
+            click.echo(f"{verb} unsubscribe for {sender}: {counts}")
+        if manual:
+            click.echo(f"Unsubscribe by hand (mailto only): {', '.join(manual)}")
 
 
 @cli.command("bounces")
