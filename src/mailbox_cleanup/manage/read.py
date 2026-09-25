@@ -52,6 +52,11 @@ class _Text(HTMLParser):
 def html_to_text(html: str) -> str:
     p = _Text()
     p.feed(html)
+    # Without close(), HTMLParser holds back trailing text that looks like the start of an
+    # unfinished character reference (e.g. "AT&T", "&amp" with no ";") in its internal
+    # buffer — it never reaches handle_data, silently dropping the whole text, not just
+    # the tail.
+    p.close()
     text = "".join(p.parts)
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 

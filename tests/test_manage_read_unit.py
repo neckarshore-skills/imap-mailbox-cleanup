@@ -13,6 +13,15 @@ def test_html_to_text_keeps_words_drops_tags():
     assert "<" not in out and "x()" not in out
 
 
+def test_html_to_text_flushes_trailing_text_that_looks_like_an_unfinished_entity():
+    """Without HTMLParser.close(), trailing text ending in something that LOOKS like the
+    start of a character reference (e.g. "AT&T", "&amp" with no trailing ";") is held back
+    in the parser's internal buffer and never reaches handle_data — losing not just the
+    tail but the WHOLE text, since feed() alone never flushes it."""
+    assert "AT&T" in html_to_text("<p>Gruss von AT&T")
+    assert "Ende" in html_to_text("Ende &amp")
+
+
 def test_parse_message_ids_tolerates_junk():
     assert parse_message_ids("<a@x.example> junk <b@y.example>\n\t<c@z.example>") == (
         "<a@x.example>",
