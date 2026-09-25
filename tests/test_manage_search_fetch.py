@@ -135,3 +135,22 @@ def test_quoted_string_cannot_supply_the_uid():
 def test_lookalike_item_cannot_supply_the_uid():
     data = _imaplib_data(b"* 1 FETCH (X-GM-UID 9 UID 5 BODY[HEADER] " + _lit(MATCH) + b")\r\n")
     assert [r.uid for r in _parse_fetch(data, {"5", "9"})] == ["5"]
+
+
+def test_parse_fetch_drops_records_for_uids_not_requested():
+    """Isolates the requested-UID filter. The end-to-end unsolicited-FETCH test above also
+    passes without it, because the full-header pass later drops a UID whose header never
+    arrives; this test pins the filter itself (defence in depth, not a duplicate)."""
+    data = [
+        (
+            b'1 (UID 5 INTERNALDATE "25-Sep-2026 10:00:00 +0000" BODY[HEADER.FIELDS (DATE)] {4}',
+            b"\r\n\r\n",
+        ),
+        b")",
+        (
+            b'9 (UID 777 INTERNALDATE "25-Sep-2026 11:00:00 +0000" BODY[HEADER.FIELDS (DATE)] {4}',
+            b"\r\n\r\n",
+        ),
+        b")",
+    ]
+    assert [r.uid for r in _parse_fetch(data, {"5"})] == ["5"]
