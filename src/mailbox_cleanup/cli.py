@@ -26,6 +26,7 @@ from .config import (
 )
 from .folders import resolve_folder
 from .imap_client import imap_connect
+from .manage.cli import manage as _manage_group
 from .operations.archive import run_archive
 from .operations.attachments import run_attachments
 from .operations.bounces import run_bounces
@@ -910,3 +911,6 @@ def bounces_cmd(account_flag, email_flag, folder, apply, json_mode):
     else:
         verb = "Moved" if apply else "Would move"
         click.echo(f"{verb} {len(res.affected_uids)} bounce/auto-reply messages to Trash")
+
+
+cli.add_command(_manage_group)
