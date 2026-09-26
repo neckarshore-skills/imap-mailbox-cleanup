@@ -1,16 +1,16 @@
 {
   "repo": "neckarshore-skills/imap-mailbox-cleanup",
-  "audited_sha": "0ebed7b5526cabd4391d6307fe469b1fc4ce29a2",
+  "audited_sha": "bbb9f7bda6f4de1a148351f2bc680400247eff53",
   "red": false,
   "red_detail": null,
   "tests": {
-    "total": 428,
+    "total": 457,
     "byType": {
-      "unit": 400,
-      "integration": 28
+      "unit": 426,
+      "integration": 31
     },
     "declared": {},
     "lenses": {}
   },
-  "updatedAt": "2026-09-25T17:13:54Z"
+  "updatedAt": "2026-09-26T10:08:34Z"
 }
