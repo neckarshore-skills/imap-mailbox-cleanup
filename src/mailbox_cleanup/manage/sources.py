@@ -52,9 +52,11 @@ class MarkdownFolderSource:
         self.warnings: list[str] = []
 
     def overlays(self) -> list[Overlay]:
+        # M6: reset BEFORE the folder-exists check, so a stale warning list from a
+        # PREVIOUS successful call cannot outlive a call that now finds the folder gone.
+        self.warnings = []
         if not self.path.is_dir():
             raise SourceMissingError(f"overlay folder not found: {self.path}")
-        self.warnings = []
         out = []
         for md in sorted(self.path.rglob("*.md")):
             try:

@@ -125,3 +125,19 @@ def test_folder_with_only_a_broken_file_returns_no_overlays_not_an_exception(tmp
     src = MarkdownFolderSource(tmp_path)
     assert src.overlays() == []
     assert any("bad.md" in w for w in src.warnings)
+
+
+def test_warnings_do_not_survive_a_later_call_whose_folder_is_now_missing(tmp_path):
+    """Fix round 1 M6: reset self.warnings BEFORE the folder-exists check, not after — a
+    stale warning list from an earlier successful call must not outlive a later call that
+    finds the folder gone."""
+    (tmp_path / "bad.md").write_bytes(b"---\nextends: [unclosed\n---\nbody\n")
+    src = MarkdownFolderSource(tmp_path)
+    src.overlays()
+    assert src.warnings != []  # sanity: the first call did warn
+    for p in tmp_path.iterdir():
+        p.unlink()
+    tmp_path.rmdir()
+    with pytest.raises(SourceMissingError):
+        src.overlays()
+    assert src.warnings == []

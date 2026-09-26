@@ -378,7 +378,8 @@ def _load_playbook_result():
 
 
 @manage.command("playbooks")
-def playbooks_cmd():
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def playbooks_cmd(json_mode):
     """List every known playbook id with its recognition hints. Never touches a mailbox."""
     r = _load_playbook_result()
     _out(
@@ -392,7 +393,9 @@ def playbooks_cmd():
                     "recognition": list(p.recognition),
                     "has_overlay": p.overlay is not None,
                 }
-                for p in r.playbooks.values()
+                # M1: `Path.iterdir()`-derived order is not deterministic across
+                # filesystems; the listing is always sorted by id.
+                for p in sorted(r.playbooks.values(), key=lambda p: p.id)
             ],
         }
     )
@@ -400,7 +403,8 @@ def playbooks_cmd():
 
 @manage.command("playbook")
 @click.option("--id", "pid", required=True)
-def playbook_cmd(pid):
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def playbook_cmd(pid, json_mode):
     """R3: an unknown --id falls back to "generic", but never silently — the response
     always carries the id actually requested, plus a warning naming the fallback.
     R10: playbook body and overlay text are the owner's own data, returned un-enveloped

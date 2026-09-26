@@ -29,11 +29,14 @@ class LoadResult:
 def public_playbooks() -> dict[str, str]:
     """Filename stem -> Markdown text, for every ``*.md`` file shipped inside the
     package's own ``playbooks/`` folder. `importlib.resources` so this works from an
-    installed wheel too, not just a source checkout (spec §3)."""
+    installed wheel too, not just a source checkout (spec §3).
+
+    Fix round 1 M1/M4: `Path.iterdir()` order depends on the filesystem, which would
+    make both `manage playbooks`' listing order and "which file wins on a duplicate id"
+    (M4) non-deterministic. Sorted by filename here, once, at the source."""
     root = resources.files("mailbox_cleanup.manage").joinpath("playbooks")
-    return {
-        p.name[:-3]: p.read_text(encoding="utf-8") for p in root.iterdir() if p.name.endswith(".md")
-    }
+    names = sorted(p.name for p in root.iterdir() if p.name.endswith(".md"))
+    return {name[:-3]: root.joinpath(name).read_text(encoding="utf-8") for name in names}
 
 
 def _parse_recognition(value: object, name: str, warnings: list[str]) -> tuple[str, ...]:
@@ -52,6 +55,21 @@ def _parse_recognition(value: object, name: str, warnings: list[str]) -> tuple[s
     return ()
 
 
+def _parse_tone(value: object, name: str, warnings: list[str]) -> str:
+    """Fix round 1 M3: `str(["a", "b"])` used to produce the literal `"['a', 'b']"`. A
+    list of strings is now joined with ", "; a plain string passes through unchanged;
+    anything else (a list with a non-string item, a number, a mapping, ...) becomes an
+    empty tone plus a warning naming the playbook, never a silently-wrong rendering."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return ", ".join(value)
+    warnings.append(f"{name}: tone must be a string or a list of strings; ignoring")
+    return ""
+
+
 def load_playbooks(public: dict[str, str], sources: Sequence[KnowledgeSource]) -> LoadResult:
     """Parse the public playbooks, then apply at most one private overlay per playbook id
     (first configured source wins; every later claim on the same id becomes a warning,
@@ -63,13 +81,21 @@ def load_playbooks(public: dict[str, str], sources: Sequence[KnowledgeSource]) -
     loader folds its per-file warning in alongside its own."""
     warnings: list[str] = []
     books: dict[str, Playbook] = {}
+    book_stems: dict[str, str] = {}  # M4: pid -> the stem that first claimed it
     for stem, text in public.items():
         meta, body = split_frontmatter(text)
         raw_id = meta.get("id")
         pid = raw_id if isinstance(raw_id, str) and raw_id else stem
+        if pid in books:
+            warnings.append(
+                f"playbook id {pid!r} declared by both {book_stems[pid]!r} and {stem!r}; "
+                f"keeping {book_stems[pid]!r}"
+            )
+            continue
         recognition = _parse_recognition(meta.get("recognition"), pid, warnings)
-        tone = str(meta.get("tone") or "")
+        tone = _parse_tone(meta.get("tone"), pid, warnings)
         books[pid] = Playbook(pid, recognition, tone, body)
+        book_stems[pid] = stem
 
     chosen: dict[str, tuple[str, Overlay]] = {}
     for src in sources:
@@ -88,11 +114,19 @@ def load_playbooks(public: dict[str, str], sources: Sequence[KnowledgeSource]) -
                 warnings.append(f"overlay {ov.origin} extends unknown playbook {ov.playbook_id!r}")
                 continue
             if ov.playbook_id in chosen:
-                first_src, _ = chosen[ov.playbook_id]
-                warnings.append(
-                    f"playbook {ov.playbook_id!r} overlaid by {first_src} and {src.name}; "
-                    f"using {first_src}"
-                )
+                first_src, first_ov = chosen[ov.playbook_id]
+                if first_src == src.name:
+                    # M2: both overlays came from the SAME folder — naming the source
+                    # twice ("overlaid by /x and /x") says nothing; name the two files.
+                    warnings.append(
+                        f"playbook {ov.playbook_id!r} overlaid twice within {src.name} "
+                        f"({first_ov.origin} and {ov.origin}); using {first_ov.origin}"
+                    )
+                else:
+                    warnings.append(
+                        f"playbook {ov.playbook_id!r} overlaid by {first_src} and {src.name}; "
+                        f"using {first_src}"
+                    )
                 continue
             chosen[ov.playbook_id] = (src.name, ov)
 

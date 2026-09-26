@@ -116,3 +116,67 @@ def test_shipped_playbook_body_has_non_ascii_and_round_trips():
 
     _, body = split_frontmatter(pub["school"])
     assert "ä" in body or "ü" in body or "ö" in body or "ß" in body
+
+
+# --- Fix round 1 M1: public_playbooks() order is deterministic --------------------------
+
+
+def test_public_playbooks_order_is_sorted_by_filename_not_filesystem_order():
+    """`Path.iterdir()` order depends on the filesystem; public_playbooks() sorts by
+    filename so it (and everything built from it) is reproducible across machines."""
+    pub = public_playbooks()
+    assert list(pub) == sorted(pub)
+
+
+# --- Fix round 1 M2: two overlays for the same id from ONE folder ----------------------
+
+
+def test_two_overlays_same_id_one_folder_names_both_files(tmp_path):
+    """Both files come from the SAME source: the old message ("overlaid by /x and /x")
+    named the folder twice and said nothing. Now it must name the two files."""
+    (tmp_path / "a.md").write_text("---\nextends: school\n---\nFrom a\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("---\nextends: school\n---\nFrom b\n", encoding="utf-8")
+    r = load_playbooks(PUB, [MarkdownFolderSource(tmp_path)])
+    assert r.playbooks["school"].overlay.body.strip() == "From a"  # first by sorted filename
+    hit = next(w for w in r.warnings if "school" in w)
+    assert str(tmp_path / "a.md") in hit
+    assert str(tmp_path / "b.md") in hit
+
+
+# --- Fix round 1 M3: tone frontmatter type validation -----------------------------------
+
+
+def test_tone_as_list_of_strings_is_joined_not_repr_d():
+    """Without the fix, str(["knapp", "per Sie"]) renders as the literal "['knapp', 'per
+    Sie']" — not usable tone guidance for a drafting agent."""
+    pub = {"school": "---\nid: school\ntone: [knapp, per Sie]\n---\nText\n"}
+    r = load_playbooks(pub, [])
+    assert r.playbooks["school"].tone == "knapp, per Sie"
+
+
+def test_tone_of_wrong_type_becomes_empty_string_with_named_warning():
+    pub = {"school": "---\nid: school\ntone: 42\n---\nText\n"}
+    r = load_playbooks(pub, [])
+    assert r.playbooks["school"].tone == ""
+    assert any("school" in w and "tone" in w for w in r.warnings)
+
+
+def test_tone_list_with_a_non_string_item_becomes_empty_string_with_named_warning():
+    pub = {"school": "---\nid: school\ntone: [knapp, 3]\n---\nText\n"}
+    r = load_playbooks(pub, [])
+    assert r.playbooks["school"].tone == ""
+    assert any("school" in w and "tone" in w for w in r.warnings)
+
+
+# --- Fix round 1 M4: two public files declaring the same id ----------------------------
+
+
+def test_duplicate_public_id_keeps_first_and_warns():
+    pub = {
+        "a": "---\nid: dup\ntone: neutral\n---\nFrom a\n",
+        "b": "---\nid: dup\ntone: neutral\n---\nFrom b\n",
+    }
+    r = load_playbooks(pub, [])
+    assert set(r.playbooks) == {"dup"}
+    assert r.playbooks["dup"].body.strip() == "From a"
+    assert any("dup" in w and "'a'" in w and "'b'" in w for w in r.warnings)
