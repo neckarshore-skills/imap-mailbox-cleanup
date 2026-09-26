@@ -372,6 +372,40 @@ def test_draft_fifo_as_body_file_is_audited_bad_args_not_hung(audit, monkeypatch
     assert rec["result"] == "error" and rec["error"] == "bad_args"
 
 
+def test_draft_fifo_swapped_in_after_a_type_check_does_not_hang(audit, monkeypatch, tmp_path):
+    """CodeRabbit on #45: a separate type check followed by open() by path is a
+    check-then-use race. A FIFO swapped in between the two makes open() block forever.
+    Simulated by making every path-based type check claim "regular file": the command must
+    still reject the FIFO, because the type is checked on the descriptor it reads from. The
+    command runs in a thread so a regression fails after 5 s instead of hanging the suite."""
+    import threading
+
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(os.path, "isfile", lambda p: True)
+    fifo = tmp_path / "body.fifo"
+    os.mkfifo(fifo)
+    out = {}
+
+    def run():
+        out["res"] = CliRunner().invoke(
+            cli, ["manage", "draft", "--uid", "7", "--body-file", str(fifo), "--json"]
+        )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout=5)
+    if t.is_alive():
+        with open(fifo, "w"):  # unblock the hung open() so the thread can finish
+            pass
+        t.join(timeout=5)
+        raise AssertionError("manage draft blocked on a FIFO body file")
+    res = out["res"]
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
 def test_draft_unreadable_body_file_is_audited_bad_args(audit, monkeypatch, tmp_path):
     """Important 1's original bug report: click.Path(exists=True, ...) rejects a chmod 000
     file itself (readable=True is Click's own default, independent of exists=) before this
