@@ -105,6 +105,37 @@ def test_hostile_subject_with_embedded_crlf_still_drafts():
     assert msg.as_bytes()  # serializes without raising
 
 
+# --- Minor 2+3: an unusable To address leaves To empty with a warning, never crashes ---
+
+
+def test_unparseable_sender_address_leaves_to_empty_with_warning():
+    # Survives control-char cleanup unchanged (no CR/LF, no control chars) but is still
+    # unparseable as an RFC 5322 address: EmailMessage()'s default policy raises IndexError
+    # deep in its address parser for a bare `<` with no closing bracket (measured directly:
+    # `EmailMessage()["To"] = '"x" <'` raises `IndexError: string index out of range`).
+    o = _orig(sender='"x" <', reply_to="")
+    msg, warnings = build_reply(o, from_addr="me@example.com", body="x")
+    assert msg["To"] is None
+    assert warnings == ["original has no usable sender address; draft has no recipient"]
+
+
+def test_empty_sender_and_no_reply_to_leaves_to_empty_with_warning():
+    o = _orig(sender="", reply_to="")
+    msg, warnings = build_reply(o, from_addr="me@example.com", body="x")
+    assert msg["To"] is None
+    assert warnings == ["original has no usable sender address; draft has no recipient"]
+
+
+# --- Minor 4: C1 control characters (\x80-\x9f) collapse too, not just C0/DEL ------------
+
+
+def test_c1_control_character_in_subject_is_collapsed():
+    o = _orig(subject="Hallo\x85Welt")  # U+0085 NEL: a C1 control character
+    msg, _ = build_reply(o, from_addr="me@example.com", body="x")
+    assert "\x85" not in msg["Subject"]
+    assert msg.as_bytes()  # serializes without raising
+
+
 # --- R7: the draft's text part is exactly the given body, nothing quoted or appended ----
 
 

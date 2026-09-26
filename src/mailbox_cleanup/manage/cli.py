@@ -264,7 +264,7 @@ def thread_cmd(account_flag, folder, uid, json_mode):
 @click.option("--account", "account_flag", default=None)
 @click.option("--folder", default="INBOX", show_default=True)
 @click.option("--uid", required=True, help="UID of the mail being answered")
-@click.option("--body-file", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--body-file", required=True)  # plain str (Important 1 — see below)
 @click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
 def draft_cmd(account_flag, folder, uid, body_file, json_mode):
     account, creds = _resolve(account_flag)
@@ -280,6 +280,15 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
         _fail_audited(
             **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
         )
+    # Important 1: --body-file is a plain str, not click.Path(...). Measured empirically:
+    # click.Path(exists=True, dir_okay=False) rejects a missing/unreadable file itself
+    # (exit 2, click usage text, no JSON, no audit) before this function ever runs — the
+    # violation this fixes. The seemingly obvious repair, click.Path(dir_okay=False,
+    # exists=False, readable=False), does NOT fully fix it either: its dir_okay=False
+    # check runs unconditionally whenever os.stat() succeeds (i.e. whenever the path
+    # exists at all, regardless of `exists=`), so a directory path is still rejected by
+    # Click itself, not by us. A plain str defers ALL of missing/unreadable/directory to
+    # our own open() below, uniformly audited bad_args.
     try:
         with open(body_file, encoding="utf-8") as f:
             body = f.read()
@@ -299,8 +308,10 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
             else:
                 msg, warnings = build_reply(orig, from_addr=account.email, body=body)
                 drafts = save_draft(mb, msg)
-    except NoDraftsFolderError as e:
-        _fail_audited(**fail, code="no_drafts_folder", message=str(e), exit_code=5)
+    except NoDraftsFolderError:  # Minor 1: never str(e) — a literal message, per R4
+        _fail_audited(
+            **fail, code="no_drafts_folder", message="no Drafts folder found", exit_code=5
+        )
     except Exception as e:  # never str(e): server text can echo mail content
         _fail_audited(
             **fail,
@@ -327,6 +338,8 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
             "drafts_folder": drafts,
             "warnings": warnings,
             "subject": wrap(msg["Subject"]),
-            "to": wrap(msg["To"]),
+            # msg["To"] can be None (Minor 2+3: no usable sender address) — a warning
+            # already covers that case, this just avoids wrap() crashing on None.
+            "to": wrap(msg["To"] or ""),
         }
     )

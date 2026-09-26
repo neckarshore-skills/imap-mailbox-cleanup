@@ -21,9 +21,11 @@ from .read import Message
 _RE_PREFIX = re.compile(r"^\s*(re|aw|antw)\s*:", re.IGNORECASE)
 
 # R3: EmailMessage() (default policy) raises ValueError on a raw CR/LF in a header
-# value; a hostile decoded Subject/To must still produce a draft. Control characters and
-# whitespace runs (including CR/LF) collapse to a single space before a header is set.
-_CONTROL_OR_WS_RUN_RE = re.compile(r"[\x00-\x1f\x7f]+|\s+")
+# value; a hostile decoded Subject/To must still produce a draft. Control characters
+# (C0 `\x00-\x1f`, DEL `\x7f`, and C1 `\x80-\x9f` — e.g. U+0085 NEL, which some decoders
+# treat as a line break) and whitespace runs collapse to a single space before a header
+# is set.
+_CONTROL_OR_WS_RUN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]+|\s+")
 
 # R1: cap the outgoing References chain at the tail of this many IDs (the most recent
 # ancestors plus the original's own Message-ID, always last) — the same "keep the tail"
@@ -57,7 +59,23 @@ def build_reply(original: Message, *, from_addr: str, body: str) -> tuple[EmailM
     subject = _clean_header_value(original.subject or "")
     msg["Subject"] = subject if _RE_PREFIX.match(subject) else f"Re: {subject}".strip()
     msg["From"] = from_addr
-    msg["To"] = _clean_header_value(original.reply_to or original.sender)
+
+    # Minor 2+3: an empty sender with no Reply-To (nothing to address a reply to), or an
+    # address that survives control-char cleanup but is still unparseable as an RFC 5322
+    # address (e.g. `'"x" <'` — a bare `<` with no closing bracket), must not crash the
+    # draft or silently emit a bare `To:` header. EmailMessage()'s default policy parses
+    # "To" as a structured Address header and can raise deep in its parser (measured:
+    # `IndexError` for `'"x" <'`) on a malformed value — caught here, To is simply left
+    # unset, and the human is told via a warning instead.
+    to_addr = _clean_header_value(original.reply_to or original.sender)
+    if to_addr:
+        try:
+            msg["To"] = to_addr
+        except Exception:
+            warnings.append("original has no usable sender address; draft has no recipient")
+    else:
+        warnings.append("original has no usable sender address; draft has no recipient")
+
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=from_addr.split("@")[-1] or None)
 

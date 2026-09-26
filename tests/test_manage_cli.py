@@ -10,6 +10,7 @@ from mailbox_cleanup.auth import Credentials
 from mailbox_cleanup.cli import cli
 from mailbox_cleanup.config import Account
 from mailbox_cleanup.manage import cli as mcli
+from mailbox_cleanup.manage.draft import NoDraftsFolderError
 from mailbox_cleanup.manage.read import Message
 from mailbox_cleanup.manage.search import Candidate
 
@@ -299,3 +300,156 @@ def test_envelope_escapes_hostile_subject_and_sender(audit, monkeypatch):
     assert res.exit_code == 0, res.output
     mail = json.loads(res.output)["message"]["mail"]
     assert mail.count("</mail-content>") == 1
+
+
+# --- `manage draft` (Task 7 fix round 1, Important 2) -----------------------------------
+
+
+def _write_body(tmp_path, text="Antwort") -> str:
+    p = tmp_path / "body.txt"
+    p.write_text(text, encoding="utf-8")
+    return str(p)
+
+
+def test_draft_rejects_non_digit_uid_before_any_imap_call(audit, monkeypatch, tmp_path):
+    def _record(creds, *, port=993):
+        raise AssertionError("imap_connect must not be reached")
+
+    monkeypatch.setattr(mcli, "imap_connect", _record)
+    body = _write_body(tmp_path)
+    res = CliRunner().invoke(
+        cli, ["manage", "draft", "--uid", "1 OR 1", "--body-file", body, "--json"]
+    )
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["subcommand"] == "manage.draft"
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
+def test_draft_missing_body_file_is_audited_bad_args(audit, monkeypatch, tmp_path):
+    """Important 1: --body-file is a plain str, not click.Path(exists=True, ...) — a
+    missing file must reach our own audited bad_args, not click's own usage error (which
+    would exit 2 with no JSON and no audit record)."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    missing = str(tmp_path / "does-not-exist.txt")
+    res = CliRunner().invoke(
+        cli, ["manage", "draft", "--uid", "7", "--body-file", missing, "--json"]
+    )
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
+def test_draft_directory_as_body_file_is_audited_bad_args(audit, monkeypatch, tmp_path):
+    """Important 1: a directory path must not hit click's own dir_okay rejection either."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    res = CliRunner().invoke(
+        cli, ["manage", "draft", "--uid", "7", "--body-file", str(tmp_path), "--json"]
+    )
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
+def test_draft_unreadable_body_file_is_audited_bad_args(audit, monkeypatch, tmp_path):
+    """Important 1's original bug report: click.Path(exists=True, ...) rejects a chmod 000
+    file itself (readable=True is Click's own default, independent of exists=) before this
+    command ever runs. Our own open() must be the thing that catches this instead."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    p = tmp_path / "unreadable.txt"
+    p.write_text("secret", encoding="utf-8")
+    p.chmod(0o000)
+    try:
+        res = CliRunner().invoke(
+            cli, ["manage", "draft", "--uid", "7", "--body-file", str(p), "--json"]
+        )
+    finally:
+        p.chmod(0o644)
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
+def test_draft_non_utf8_body_file_is_audited_bad_args(audit, monkeypatch, tmp_path):
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    p = tmp_path / "body.txt"
+    p.write_bytes(b"\xff\xfe not valid utf-8")
+    res = CliRunner().invoke(
+        cli, ["manage", "draft", "--uid", "7", "--body-file", str(p), "--json"]
+    )
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
+def test_draft_not_found_is_audited(audit, monkeypatch, tmp_path):
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: None)
+    body = _write_body(tmp_path)
+    res = CliRunner().invoke(cli, ["manage", "draft", "--uid", "7", "--body-file", body, "--json"])
+    assert res.exit_code == 1, res.output
+    assert json.loads(res.output)["error_code"] == "not_found"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "not_found"
+
+
+def test_draft_no_drafts_folder_is_audited_never_leaks_exception_text(audit, monkeypatch, tmp_path):
+    """Minor 1: NoDraftsFolderError's message must never reach output/audit via str(e)."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: _message())
+
+    def _boom_save(mb, msg):
+        raise NoDraftsFolderError(SENTINEL)
+
+    monkeypatch.setattr(mcli, "save_draft", _boom_save)
+    body = _write_body(tmp_path)
+    res = CliRunner().invoke(cli, ["manage", "draft", "--uid", "7", "--body-file", body, "--json"])
+    assert res.exit_code == 5, res.output
+    assert json.loads(res.output)["error_code"] == "no_drafts_folder"
+    assert SENTINEL not in res.output
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "no_drafts_folder"
+    assert SENTINEL not in audit.read_text(encoding="utf-8")
+
+
+def test_draft_operation_error_never_leaks_exception_text(audit, monkeypatch, tmp_path):
+    def _boom(creds, *, port=993):
+        raise RuntimeError(f"APPEND failed near {SENTINEL}")
+
+    monkeypatch.setattr(mcli, "imap_connect", _boom)
+    body = _write_body(tmp_path)
+    res = CliRunner().invoke(cli, ["manage", "draft", "--uid", "7", "--body-file", body, "--json"])
+    assert res.exit_code == 2, res.output
+    out = json.loads(res.output)
+    assert out["error_code"] == "operation_error"
+    assert SENTINEL not in res.output
+    assert "RuntimeError" in out["message"]
+    (rec,) = _records(audit)
+    assert rec["subcommand"] == "manage.draft"
+    assert rec["result"] == "error" and rec["error"] == "operation_error"
+    assert SENTINEL not in audit.read_text(encoding="utf-8")
+
+
+def test_draft_success_audits_source_folder_not_drafts_folder(audit, monkeypatch, tmp_path):
+    """(f): the success audit record's `folder` is the SOURCE folder the UID was read
+    from, never the resolved Drafts folder `save_draft` returns."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    monkeypatch.setattr(mcli, "read_message", lambda mb, *, uid, folder: _message())
+    monkeypatch.setattr(mcli, "save_draft", lambda mb, msg: "Drafts")
+    body = _write_body(tmp_path)
+    res = CliRunner().invoke(
+        cli,
+        ["manage", "draft", "--uid", "7", "--folder", "Custom", "--body-file", body, "--json"],
+    )
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert out["drafts_folder"] == "Drafts"
+    (rec,) = _records(audit)
+    assert rec["result"] == "success"
+    assert rec["folder"] == "Custom"
+    assert rec["folder"] != "Drafts"
