@@ -22,8 +22,10 @@ from .args import unsafe_arg_keys
 from .draft import NoDraftsFolderError, build_reply, save_draft
 from .envelope import wrap
 from .ids import safe_message_id
+from .playbooks import load_playbooks, public_playbooks
 from .read import _UID_RE, Message, read_message
 from .search import search
+from .sources import SourcesConfigError, load_sources
 from .thread import thread
 
 
@@ -361,5 +363,67 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
             # msg["To"] can be None (Minor 2+3: no usable sender address) — a warning
             # already covers that case, this just avoids wrap() crashing on None.
             "to": wrap(msg["To"] or ""),
+        }
+    )
+
+
+def _load_playbook_result():
+    """R1: a malformed sources.json is reported, never swallowed. Neither `manage
+    playbooks` nor `manage playbook` touches an account or a mailbox, so a failure here
+    is NOT audited (same as `_resolve` failures)."""
+    try:
+        return load_playbooks(public_playbooks(), load_sources())
+    except SourcesConfigError as e:
+        _fail("sources_config_error", str(e), 4)
+
+
+@manage.command("playbooks")
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def playbooks_cmd(json_mode):
+    """List every known playbook id with its recognition hints. Never touches a mailbox."""
+    r = _load_playbook_result()
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.playbooks",
+            "warnings": r.warnings,
+            "playbooks": [
+                {
+                    "id": p.id,
+                    "recognition": list(p.recognition),
+                    "has_overlay": p.overlay is not None,
+                }
+                # M1: `Path.iterdir()`-derived order is not deterministic across
+                # filesystems; the listing is always sorted by id.
+                for p in sorted(r.playbooks.values(), key=lambda p: p.id)
+            ],
+        }
+    )
+
+
+@manage.command("playbook")
+@click.option("--id", "pid", required=True)
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def playbook_cmd(pid, json_mode):
+    """R3: an unknown --id falls back to "generic", but never silently — the response
+    always carries the id actually requested, plus a warning naming the fallback.
+    R10: playbook body and overlay text are the owner's own data, returned un-enveloped
+    (never mail content, so `wrap()` does not apply here)."""
+    r = _load_playbook_result()
+    warnings = list(r.warnings)
+    p = r.playbooks.get(pid)
+    if p is None:
+        warnings.append(f"no playbook {pid!r}; using generic")
+        p = r.playbooks["generic"]
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.playbook",
+            "requested_id": pid,
+            "id": p.id,
+            "tone": p.tone,
+            "body": p.body,
+            "overlay": p.overlay.body if p.overlay else None,
+            "warnings": warnings,
         }
     )

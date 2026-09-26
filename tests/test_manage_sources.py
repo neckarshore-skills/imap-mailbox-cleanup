@@ -104,9 +104,40 @@ def test_malformed_sources_file_is_rejected_loudly(tmp_path, monkeypatch, conten
     "raw",
     [b"---\nextends: [unclosed\n---\nbody\n", b"---\nextends: generic\n---\n\xff\xfe bad\n"],
 )
-def test_unreadable_overlay_file_is_named_not_crashed(tmp_path, raw):
-    """One broken note must not escape as a raw YAML or Unicode error: it surfaces as a
-    SourceMissingError (which Task 9 reports and skips) naming the file."""
+def test_unreadable_overlay_file_is_skipped_not_crashed(tmp_path, raw):
+    """Task 9 R5: one broken note must not escape as a raw YAML or Unicode error, AND must
+    not drop the rest of the folder either — it is skipped, named in `.warnings` (never
+    its content), while a good file alongside it still loads."""
     (tmp_path / "bad.md").write_bytes(raw)
-    with pytest.raises(SourceMissingError, match="bad.md"):
-        MarkdownFolderSource(tmp_path).overlays()
+    (tmp_path / "good.md").write_text("---\nextends: school\n---\nKlasse 4b\n", encoding="utf-8")
+    src = MarkdownFolderSource(tmp_path)
+    overlays = src.overlays()
+    assert [(o.playbook_id, o.body.strip()) for o in overlays] == [("school", "Klasse 4b")]
+    joined = " ".join(src.warnings)
+    assert "bad.md" in joined
+    assert "unclosed" not in joined and "\xff" not in joined
+
+
+def test_folder_with_only_a_broken_file_returns_no_overlays_not_an_exception(tmp_path):
+    """The narrower case: nothing else in the folder to salvage — still no exception, just
+    an empty overlay list plus the named warning."""
+    (tmp_path / "bad.md").write_bytes(b"---\nextends: [unclosed\n---\nbody\n")
+    src = MarkdownFolderSource(tmp_path)
+    assert src.overlays() == []
+    assert any("bad.md" in w for w in src.warnings)
+
+
+def test_warnings_do_not_survive_a_later_call_whose_folder_is_now_missing(tmp_path):
+    """Fix round 1 M6: reset self.warnings BEFORE the folder-exists check, not after — a
+    stale warning list from an earlier successful call must not outlive a later call that
+    finds the folder gone."""
+    (tmp_path / "bad.md").write_bytes(b"---\nextends: [unclosed\n---\nbody\n")
+    src = MarkdownFolderSource(tmp_path)
+    src.overlays()
+    assert src.warnings != []  # sanity: the first call did warn
+    for p in tmp_path.iterdir():
+        p.unlink()
+    tmp_path.rmdir()
+    with pytest.raises(SourceMissingError):
+        src.overlays()
+    assert src.warnings == []

@@ -505,3 +505,157 @@ def test_draft_success_audits_source_folder_not_drafts_folder(audit, monkeypatch
     assert rec["result"] == "success"
     assert rec["folder"] == "Custom"
     assert rec["folder"] != "Drafts"
+
+
+# --- `manage playbooks` / `manage playbook` (Task 9) ------------------------------------
+
+
+@pytest.mark.parametrize("cmd", [["playbooks"], ["playbook", "--id", "school"]])
+def test_playbook_commands_touch_no_account_and_are_not_audited(audit, cmd):
+    """R1: these commands resolve no account and touch no mailbox — `_resolve` is never
+    called, so even a SUCCESSFUL run produces no audit record (same shape as `_resolve`
+    failures elsewhere in this file). The malformed-sources.json case below confirms the
+    same holds for the error path."""
+    res = CliRunner().invoke(cli, ["manage", *cmd])
+    assert res.exit_code == 0, res.output
+    assert not audit.exists()
+
+
+def test_playbooks_lists_shipped_ids_and_recognition(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(tmp_path / "sources.json"))
+    res = CliRunner().invoke(cli, ["manage", "playbooks"])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    ids = {p["id"] for p in out["playbooks"]}
+    assert {"generic", "recruiter", "school", "bank", "insurance"} <= ids
+    assert out["warnings"] == []
+    school = next(p for p in out["playbooks"] if p["id"] == "school")
+    assert "Elternabend" in school["recognition"]
+    assert school["has_overlay"] is False
+
+
+def test_playbook_returns_body_and_tone_for_a_known_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(tmp_path / "sources.json"))
+    res = CliRunner().invoke(cli, ["manage", "playbook", "--id", "bank"])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert out["requested_id"] == "bank" and out["id"] == "bank"
+    assert "Vorgangsnummer" in out["body"]
+    assert out["overlay"] is None
+    assert out["warnings"] == []
+
+
+def test_playbook_unknown_id_falls_back_to_generic_with_a_named_warning(tmp_path, monkeypatch):
+    """R3: never a silent substitution — the response must still carry the id that was
+    actually requested, plus a warning naming the fallback."""
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(tmp_path / "sources.json"))
+    res = CliRunner().invoke(cli, ["manage", "playbook", "--id", "pension"])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert out["requested_id"] == "pension"
+    assert out["id"] == "generic"
+    assert any("pension" in w and "generic" in w for w in out["warnings"])
+
+
+def test_playbook_overlay_and_public_body_are_not_wrapped(tmp_path, monkeypatch):
+    """R10: overlay text and public playbook text are the owner's own data, not mail
+    content — neither is enveloped by `wrap()`."""
+    overlays = tmp_path / "overlays"
+    overlays.mkdir()
+    (overlays / "school.md").write_text(
+        "---\nextends: school\n---\nPrivater Zusatztext\n", encoding="utf-8"
+    )
+    src = tmp_path / "sources.json"
+    src.write_text(json.dumps({"schema_version": 1, "folders": [str(overlays)]}))
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(src))
+    res = CliRunner().invoke(cli, ["manage", "playbook", "--id", "school"])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert out["overlay"] == "Privater Zusatztext\n"
+    assert "<mail-content>" not in res.output
+
+
+def test_playbooks_reports_malformed_sources_config_unaudited(tmp_path, monkeypatch):
+    """R1: a broken sources.json is reported as a structured, unaudited error — never a
+    traceback, never silently swallowed."""
+    bad = tmp_path / "sources.json"
+    bad.write_text("{not json", encoding="utf-8")
+    audit_log = tmp_path / "audit.log"
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(bad))
+    monkeypatch.setenv("MAILBOX_CLEANUP_AUDIT_LOG", str(audit_log))
+    res = CliRunner().invoke(cli, ["manage", "playbooks"])
+    assert res.exit_code == 4, res.output
+    out = json.loads(res.output)
+    assert out["ok"] is False
+    assert out["error_code"] == "sources_config_error"
+    assert str(bad) in out["message"]
+    assert not audit_log.exists()
+
+
+def test_playbook_reports_malformed_sources_config_unaudited(tmp_path, monkeypatch):
+    bad = tmp_path / "sources.json"
+    bad.write_text("{not json", encoding="utf-8")
+    audit_log = tmp_path / "audit.log"
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(bad))
+    monkeypatch.setenv("MAILBOX_CLEANUP_AUDIT_LOG", str(audit_log))
+    res = CliRunner().invoke(cli, ["manage", "playbook", "--id", "school"])
+    assert res.exit_code == 4, res.output
+    out = json.loads(res.output)
+    assert out["ok"] is False
+    assert out["error_code"] == "sources_config_error"
+    assert not audit_log.exists()
+
+
+# --- Fix round 1, Important 1: --json accepted for symmetry with every other command ---
+
+
+@pytest.mark.parametrize("cmd", [["playbooks", "--json"], ["playbook", "--id", "school", "--json"]])
+def test_playbook_commands_accept_json_flag_for_symmetry(tmp_path, monkeypatch, cmd):
+    """All 12 top-level commands and the 4 other manage commands accept --json; the
+    design doc's `<subcommand> [--apply | --json]` shape and skill/SKILL.md examples
+    assume every manage subcommand does too. Before this fix, click's own usage error
+    (exit 2, plain text, no JSON) hit an agent that followed that convention."""
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(tmp_path / "sources.json"))
+    res = CliRunner().invoke(cli, ["manage", *cmd])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)  # must parse cleanly as JSON
+    assert out["ok"] is True
+
+
+# --- Fix round 1 M1: manage playbooks' listing is sorted by id, not insertion order -----
+
+
+def test_playbooks_listing_is_sorted_by_id_regardless_of_loader_order(monkeypatch):
+    """The loader itself may hand back playbooks in whatever order its input arrived in
+    (see public_playbooks() for why that is now sorted too) — the CLI listing sorts
+    independently, so `manage playbooks` is deterministic even if that ever changes."""
+    from mailbox_cleanup.manage.playbooks import LoadResult, Playbook
+
+    out_of_order = LoadResult(
+        playbooks={
+            "zzz": Playbook("zzz", (), "neutral", "Z"),
+            "aaa": Playbook("aaa", (), "neutral", "A"),
+            "mmm": Playbook("mmm", (), "neutral", "M"),
+        }
+    )
+    monkeypatch.setattr(mcli, "load_playbooks", lambda public, sources: out_of_order)
+    res = CliRunner().invoke(cli, ["manage", "playbooks"])
+    assert res.exit_code == 0, res.output
+    ids = [p["id"] for p in json.loads(res.output)["playbooks"]]
+    assert ids == ["aaa", "mmm", "zzz"]
+
+
+# --- Fix round 1 M5: a malformed overlay file's warning reaches `manage playbook` JSON --
+
+
+def test_playbook_cli_surfaces_a_malformed_overlay_files_warning(tmp_path, monkeypatch):
+    overlays = tmp_path / "overlays"
+    overlays.mkdir()
+    (overlays / "bad.md").write_bytes(b"---\nextends: [unclosed\n---\nbody\n")
+    src = tmp_path / "sources.json"
+    src.write_text(json.dumps({"schema_version": 1, "folders": [str(overlays)]}))
+    monkeypatch.setenv("MAILBOX_CLEANUP_SOURCES", str(src))
+    res = CliRunner().invoke(cli, ["manage", "playbook", "--id", "generic"])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert any("bad.md" in w for w in out["warnings"])
