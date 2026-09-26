@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import datetime
-import re
 
 from imap_tools import AND, H
 
 from ..folders import resolve_folder
+from .ids import SAFE_MSGID_RE as _SAFE_MSGID_RE
 from .read import Message, read_message, to_message
 
 # Every Message-ID used as an IMAP HEADER search value comes from the mail itself
 # (References / In-Reply-To / Message-ID headers), i.e. it is attacker input (R4). Only
-# values matching this strict allowlist reach the server: `<...>` with no `"`, `\`, `(`,
-# `)`, `*`, space or control character inside — nothing that could break out of imap_tools'
-# quoting (which only escapes `\` and `"`).
-_SAFE_MSGID_RE = re.compile(r"<[A-Za-z0-9!#$%&'+/=?^_`{|}~.@\[\]:-]+>")
+# values matching this strict allowlist reach the server — see manage/ids.py, the single
+# shared definition reused by cli.py (M3) and draft.py (Task 7 dispatch ruling R1) too.
 
 # Cap on distinct Message-IDs searched per thread() call, so a hostile References header
 # cannot fan out into an unbounded number of IMAP commands. The most recent ids (the tail

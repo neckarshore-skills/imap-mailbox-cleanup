@@ -8,6 +8,7 @@ import sys
 from collections.abc import Iterable
 
 import click
+from click.core import ParameterSource
 
 from .. import SCHEMA_VERSION
 from ..audit import log_manage_action
@@ -16,10 +17,12 @@ from ..cli_helpers import AccountFlagsError, resolve_account_and_credentials
 from ..config import Account
 from ..imap_client import imap_connect
 from .args import unsafe_arg_keys
+from .draft import NoDraftsFolderError, build_reply, save_draft
 from .envelope import wrap
+from .ids import safe_message_id
 from .read import _UID_RE, Message, read_message
 from .search import search
-from .thread import _SAFE_MSGID_RE, thread
+from .thread import thread
 
 
 def _out(payload: dict) -> None:
@@ -151,22 +154,15 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
     )
 
 
-_MAX_MESSAGE_ID_LEN = 250
-
-
-def _safe_message_id(mid: str) -> str:
-    """`message_id` sits outside the envelope alongside `uid`/`folder` because Task 7
-    threads replies off it, but unlike those it is mail-derived (R9/M3): it comes straight
-    off the Message-ID header. Validated against `thread._SAFE_MSGID_RE` — the SAME strict
-    allowlist used before a Message-ID reaches IMAP as a search value (`<...>` with no
-    `"`, `\\`, `(`, `)`, `*`, space or control character), not the looser extraction shape
-    `read._MSGID_RE` — plus a length cap, since a mail can put arbitrary-length junk in its
-    Message-ID header and this field is emitted as a bare JSON string outside
-    <mail-content>. A value that fails either check becomes an empty string instead of
-    leaking whatever a hostile mail put there."""
-    if len(mid) > _MAX_MESSAGE_ID_LEN:
-        return ""
-    return mid if _SAFE_MSGID_RE.fullmatch(mid) else ""
+# `message_id` sits outside the envelope alongside `uid`/`folder` because Task 7 threads
+# replies off it, but unlike those it is mail-derived (R9/M3): it comes straight off the
+# Message-ID header. `_safe_message_id` is `ids.safe_message_id` (Task 7 dispatch ruling
+# R1: one shared definition, reused here and by draft.py, not copied) — validated against
+# the SAME strict allowlist used before a Message-ID reaches IMAP as a search value, not
+# the looser extraction shape `read._MSGID_RE`, plus a length cap. A value that fails
+# either check becomes an empty string instead of leaking whatever a hostile mail put
+# there.
+_safe_message_id = safe_message_id
 
 
 def _message_json(m: Message) -> dict:
@@ -260,5 +256,77 @@ def thread_cmd(account_flag, folder, uid, json_mode):
             "ok": True,
             "subcommand": "manage.thread",
             "messages": [_message_json(m) for m in msgs],
+        }
+    )
+
+
+@manage.command("draft")
+@click.option("--account", "account_flag", default=None)
+@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--uid", required=True, help="UID of the mail being answered")
+@click.option("--body-file", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def draft_cmd(account_flag, folder, uid, body_file, json_mode):
+    account, creds = _resolve(account_flag)
+    arg_keys = ["uid", "body_file"]
+    # R4: "folder" joins arg_keys only when the user actually passed --folder, not for
+    # its default — unlike search/read/thread, which never track it at all.
+    ctx = click.get_current_context()
+    if ctx.get_parameter_source("folder") == ParameterSource.COMMANDLINE:
+        arg_keys.append("folder")
+    fail = dict(subcommand="manage.draft", account=account, folder=folder, arg_keys=arg_keys)
+    _reject_control_chars(fail, folder=folder)
+    if not _UID_RE.fullmatch(uid):
+        _fail_audited(
+            **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
+        )
+    try:
+        with open(body_file, encoding="utf-8") as f:
+            body = f.read()
+    except (OSError, UnicodeDecodeError):
+        _fail_audited(
+            **fail,
+            code="bad_args",
+            message="--body-file could not be read as UTF-8 text",
+            exit_code=4,
+        )
+    not_found = False
+    try:
+        with imap_connect(creds, port=account.port) as mb:
+            orig = read_message(mb, uid=uid, folder=folder)
+            if orig is None:
+                not_found = True
+            else:
+                msg, warnings = build_reply(orig, from_addr=account.email, body=body)
+                drafts = save_draft(mb, msg)
+    except NoDraftsFolderError as e:
+        _fail_audited(**fail, code="no_drafts_folder", message=str(e), exit_code=5)
+    except Exception as e:  # never str(e): server text can echo mail content
+        _fail_audited(
+            **fail,
+            code="operation_error",
+            message=f"IMAP operation failed ({type(e).__name__})",
+            exit_code=2,
+        )
+    if not_found:
+        _fail_audited(
+            **fail, code="not_found", message=f"no message with UID {uid} in {folder}", exit_code=1
+        )
+    log_manage_action(
+        subcommand="manage.draft",
+        account=account.alias,
+        folder=folder,
+        uids=[uid],
+        result="success",
+        arg_keys=arg_keys,
+    )
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.draft",
+            "drafts_folder": drafts,
+            "warnings": warnings,
+            "subject": wrap(msg["Subject"]),
+            "to": wrap(msg["To"]),
         }
     )
