@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import stat
 import sys
 from collections.abc import Iterable
 
@@ -291,25 +292,31 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
     # Click itself, not by us. A plain str defers ALL of missing/unreadable/directory to
     # our own open() below, uniformly audited bad_args.
     #
-    # Fix round 2 fold-in: a FIFO (named pipe) given as --body-file passes every check
-    # above but makes a bare open() block forever waiting for a writer, hanging the whole
-    # command. os.path.isfile() (stat-based, not an open) rejects it before we ever touch
-    # the file — same audited bad_args, exit 4, as missing/directory/unreadable.
-    if not os.path.isfile(body_file):
-        _fail_audited(
-            **fail,
-            code="bad_args",
-            message="--body-file must be a readable regular file",
-            exit_code=4,
-        )
+    # A FIFO (named pipe) given as --body-file would make a blocking open() wait forever
+    # for a writer. A separate type check before open() by path is not enough (CodeRabbit
+    # on #45): the path can be swapped for a FIFO between check and open. So the file is
+    # opened ONCE, non-blocking, and the type is checked on that descriptor -- the object
+    # that is then read. Missing, unreadable, directory and non-regular paths all end in
+    # the same audited bad_args, exit 4.
+    body = None
     try:
-        with open(body_file, encoding="utf-8") as f:
-            body = f.read()
-    except (OSError, UnicodeDecodeError):
+        fd = os.open(body_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        fd = None
+    if fd is not None:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            try:
+                with os.fdopen(fd, encoding="utf-8") as f:
+                    body = f.read()
+            except (OSError, UnicodeDecodeError):
+                body = None
+        else:
+            os.close(fd)
+    if body is None:
         _fail_audited(
             **fail,
             code="bad_args",
-            message="--body-file could not be read as UTF-8 text",
+            message="--body-file must be a readable regular UTF-8 text file",
             exit_code=4,
         )
     not_found = False
