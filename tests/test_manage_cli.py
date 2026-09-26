@@ -1,6 +1,7 @@
 """`manage` CLI group without a server: error audit, argument handling, envelope."""
 
 import json
+import os
 from contextlib import contextmanager
 
 import pytest
@@ -347,6 +348,23 @@ def test_draft_directory_as_body_file_is_audited_bad_args(audit, monkeypatch, tm
     monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
     res = CliRunner().invoke(
         cli, ["manage", "draft", "--uid", "7", "--body-file", str(tmp_path), "--json"]
+    )
+    assert res.exit_code == 4, res.output
+    assert json.loads(res.output)["error_code"] == "bad_args"
+    (rec,) = _records(audit)
+    assert rec["result"] == "error" and rec["error"] == "bad_args"
+
+
+def test_draft_fifo_as_body_file_is_audited_bad_args_not_hung(audit, monkeypatch, tmp_path):
+    """Fix round 2 fold-in: a FIFO given as --body-file must not make a bare open() block
+    forever waiting for a writer. os.path.isfile() (stat-based, no open) rejects it before
+    the command ever touches the file; if that check regressed or ran after open(), this
+    test would hang rather than fail cleanly."""
+    monkeypatch.setattr(mcli, "imap_connect", _fake_connect)
+    fifo = tmp_path / "body.fifo"
+    os.mkfifo(fifo)
+    res = CliRunner().invoke(
+        cli, ["manage", "draft", "--uid", "7", "--body-file", str(fifo), "--json"]
     )
     assert res.exit_code == 4, res.output
     assert json.loads(res.output)["error_code"] == "bad_args"

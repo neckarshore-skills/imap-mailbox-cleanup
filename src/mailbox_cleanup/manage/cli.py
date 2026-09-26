@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import sys
 from collections.abc import Iterable
 
@@ -289,6 +290,18 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
     # exists at all, regardless of `exists=`), so a directory path is still rejected by
     # Click itself, not by us. A plain str defers ALL of missing/unreadable/directory to
     # our own open() below, uniformly audited bad_args.
+    #
+    # Fix round 2 fold-in: a FIFO (named pipe) given as --body-file passes every check
+    # above but makes a bare open() block forever waiting for a writer, hanging the whole
+    # command. os.path.isfile() (stat-based, not an open) rejects it before we ever touch
+    # the file — same audited bad_args, exit 4, as missing/directory/unreadable.
+    if not os.path.isfile(body_file):
+        _fail_audited(
+            **fail,
+            code="bad_args",
+            message="--body-file must be a readable regular file",
+            exit_code=4,
+        )
     try:
         with open(body_file, encoding="utf-8") as f:
             body = f.read()

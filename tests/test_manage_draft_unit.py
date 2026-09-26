@@ -105,14 +105,19 @@ def test_hostile_subject_with_embedded_crlf_still_drafts():
     assert msg.as_bytes()  # serializes without raising
 
 
-# --- Minor 2+3: an unusable To address leaves To empty with a warning, never crashes ---
+# --- Minor 2+3 (fix round 2): a strict value check gates To, not exception-catching -----
+#
+# `EmailMessage()["To"] = <value>`'s own parser is not a safe gate: `'"x" <'` raises
+# IndexError on Python 3.11 but silently becomes 'x, <>' with NO exception on 3.12/3.13/
+# 3.14 (measured directly on 3.11; pyproject allows any of these — requires-python
+# >=3.11, no upper bound). `build_reply` now runs `reply_to or sender` through
+# `email.utils.parseaddr` and accepts the result only if `_STRICT_ADDR_RE` matches a
+# single, clean addr-spec — a value check that does not depend on stdlib leniency.
 
 
 def test_unparseable_sender_address_leaves_to_empty_with_warning():
-    # Survives control-char cleanup unchanged (no CR/LF, no control chars) but is still
-    # unparseable as an RFC 5322 address: EmailMessage()'s default policy raises IndexError
-    # deep in its address parser for a bare `<` with no closing bracket (measured directly:
-    # `EmailMessage()["To"] = '"x" <'` raises `IndexError: string index out of range`).
+    # `parseaddr('"x" <')` -> `('x', '')`: an empty parsed addr, rejected by the value
+    # check regardless of Python version — no longer relies on an exception being raised.
     o = _orig(sender='"x" <', reply_to="")
     msg, warnings = build_reply(o, from_addr="me@example.com", body="x")
     assert msg["To"] is None
@@ -124,6 +129,24 @@ def test_empty_sender_and_no_reply_to_leaves_to_empty_with_warning():
     msg, warnings = build_reply(o, from_addr="me@example.com", body="x")
     assert msg["To"] is None
     assert warnings == ["original has no usable sender address; draft has no recipient"]
+
+
+def test_two_comma_joined_addresses_are_rejected_not_split_or_sent_to_both():
+    # `parseaddr('a@b, c@d')` -> `('', '')`: the whole value is unparseable as ONE
+    # mailbox, not silently split or the first address picked — the draft must not
+    # address itself to both. Yields no exception on any Python version (garbage-in,
+    # garbage-out was the bug this round reopened); the value check rejects it outright.
+    o = _orig(sender="a@b, c@d", reply_to="")
+    msg, warnings = build_reply(o, from_addr="me@example.com", body="x")
+    assert msg["To"] is None
+    assert warnings == ["original has no usable sender address; draft has no recipient"]
+
+
+def test_display_name_address_yields_the_bare_addr_in_to():
+    o = _orig(sender="Mira Beispiel <mira@example.org>", reply_to="")
+    msg, warnings = build_reply(o, from_addr="me@example.com", body="x")
+    assert msg["To"] == "mira@example.org"
+    assert warnings == []
 
 
 # --- Minor 4: C1 control characters (\x80-\x9f) collapse too, not just C0/DEL ------------
