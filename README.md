@@ -33,7 +33,7 @@ The CLI is useful on its own. The Skill turns it into a guided triage workflow.
 
 ```
 Claude Code Session
-  ↓ /mailbox-cleanup or natural request
+  ↓ /mailbox-autopilot:cleanup or natural request
 Claude Skill (Markdown, orchestrator)
   ↓ subprocess + JSON
 CLI: mailbox-cleanup <subcommand> [--account=<alias>] [--apply | --json]
@@ -148,10 +148,11 @@ mailbox-cleanup config remove private      # also deletes Keychain password
 ### From Claude Code
 
 ```
-/mailbox-cleanup
+/mailbox-autopilot:cleanup
+/mailbox-autopilot:manage
 ```
 
-The Skill runs `auth test`, then `scan`, presents a German-language category summary, and prompts for action per category. Always shows a dry-run preview before any `--apply`.
+Or ask in plain words ("räum mein Postfach auf", "antworte auf die Mail von X"). The cleanup skill runs `auth test`, then `scan`, presents a German-language category summary, and prompts for action per category. Always shows a dry-run preview before any `--apply`.
 
 ### Standalone CLI
 
