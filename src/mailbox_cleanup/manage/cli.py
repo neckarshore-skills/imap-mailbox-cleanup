@@ -405,10 +405,13 @@ def playbooks_cmd(json_mode):
 @click.option("--id", "pid", required=True)
 @click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
 def playbook_cmd(pid, json_mode):
-    """R3: an unknown --id falls back to "generic", but never silently — the response
+    """Show one playbook with its overlays. Never touches a mailbox.
+
+    R3: an unknown --id falls back to "generic", but never silently — the response
     always carries the id actually requested, plus a warning naming the fallback.
     R10: playbook body and overlay text are the owner's own data, returned un-enveloped
-    (never mail content, so `wrap()` does not apply here)."""
+    (never mail content, so `wrap()` does not apply here).
+    """
     r = _load_playbook_result()
     warnings = list(r.warnings)
     p = r.playbooks.get(pid)

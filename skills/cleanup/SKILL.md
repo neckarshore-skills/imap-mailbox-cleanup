@@ -1,11 +1,11 @@
 ---
-name: mailbox-cleanup
-description: Discover and clean up an IONOS IMAP mailbox via the `mailbox-cleanup` CLI. Use when the user wants to triage, scan, delete, archive, or unsubscribe from messages in their mail account. Always shows dry-run preview before any destructive operation. Multi-account capable.
+name: cleanup
+description: Discover and clean up an IONOS IMAP mailbox via the `mailbox-autopilot` CLI. Use when the user wants to triage, scan, delete, archive, or unsubscribe from messages in their mail account. Always shows dry-run preview before any destructive operation. Multi-account capable. For finding, reading or answering mail use the manage skill.
 ---
 
-# mailbox-cleanup
+# cleanup (mailbox-autopilot)
 
-Conversational orchestrator over the `mailbox-cleanup` CLI. Wraps discovery → preview → apply loops with safety checks. Multi-account capable: every CLI call resolves to one account via `--account=<alias|email>` or the configured default.
+Conversational orchestrator over the `mailbox-autopilot` CLI (`mailbox-cleanup` is the older name of the same CLI). Wraps discovery → preview → apply loops with safety checks. Multi-account capable: every CLI call resolves to one account via `--account=<alias|email>` or the configured default.
 
 ## Required CLI version
 
@@ -16,7 +16,7 @@ Schema version 1. The CLI emits `"schema_version": 1` in every JSON response —
 Before anything else, find out which accounts are configured:
 
 ```bash
-mailbox-cleanup config list --json
+mailbox-autopilot config list --json
 ```
 
 Read the `accounts` array from the response. Three states:
@@ -32,12 +32,16 @@ if config.json missing AND user has v0.1 keychain entry:
   run any subcommand with --email=<their email> → triggers auto-bootstrap
   OR run `config init --import-email=<email>` explicitly
 if config.json missing AND no v0.1 entry:
-  ask user for alias + email, then guide them to run in a real terminal:
-    mailbox-cleanup auth set --alias=<alias> --email=<email>
+  ask user for alias + email, then guide them to run in a real terminal (absolute launcher path, see below):
+    mailbox-autopilot auth set --alias=<alias> --email=<email>
   (auth set needs a TTY for getpass — Claude Code cannot run it interactively)
 if config.json exists:
   use accounts as listed; ask user which one if ambiguous
 ```
+
+### Commands the user runs in their own terminal
+
+`mailbox-autopilot` is on PATH only inside Claude Code, where the plugin adds its `bin/` folder. The user's own terminal does not know the command. Before you hand the user a command such as `auth set`, run `command -v mailbox-autopilot` yourself and give them the absolute path it prints, for example `/Users/<name>/.claude/plugins/.../bin/mailbox-autopilot auth set --alias=<alias> --email=<email>`. Never tell them to type the bare command name.
 
 ## Picking an account
 
@@ -52,17 +56,17 @@ Store the chosen alias in your working memory for the session. Substitute `<ACCO
 ## Auth check (run after picking the account)
 
 ```bash
-mailbox-cleanup auth test --account=<ACCOUNT> --json
+mailbox-autopilot auth test --account=<ACCOUNT> --json
 ```
 
 - Exit 0 with `"ok": true`: continue.
-- Exit 3 (`auth_missing`): tell the user to run `mailbox-cleanup auth set --alias=<ACCOUNT> --email=<their email>` in a real terminal (Terminal.app / iTerm — `getpass` requires a TTY). Do not proceed.
+- Exit 3 (`auth_missing`): tell the user to run `auth set --alias=<ACCOUNT> --email=<their email>` in a real terminal, with the absolute launcher path from "Commands the user runs in their own terminal" (Terminal.app / iTerm — `getpass` requires a TTY). Do not proceed.
 - Exit 4 (`no_account_selected` / `unknown_account`): re-check the account list; you may have a stale alias.
 - Exit 2 (connection): show the message; do not retry blindly.
 
 ## Standard flow
 
-1. Run `mailbox-cleanup scan --account=<ACCOUNT> --json`.
+1. Run `mailbox-autopilot scan --account=<ACCOUNT> --json`.
 2. Validate `schema_version == 1`. Otherwise abort.
 3. Render a German Markdown summary:
 
@@ -98,15 +102,15 @@ Replace `<ACCOUNT>` with the chosen alias (or omit the `--account` flag when onl
 
 | User intent | Command |
 |-------------|---------|
-| "Welche Accounts?" | `mailbox-cleanup config list --json` |
-| "Scan" / "Was ist drin?" | `mailbox-cleanup scan --account=<ACCOUNT> --json` |
-| "Wer schickt am meisten?" | `mailbox-cleanup senders --account=<ACCOUNT> --top 20 --json` |
-| "Lösch alles von X" | `mailbox-cleanup delete --account=<ACCOUNT> --sender X --json` (then `--apply`) |
-| "Alles älter als 1 Jahr archivieren" | `mailbox-cleanup archive --account=<ACCOUNT> --older-than 12m --json` |
-| "Vom Newsletter X abmelden" | `mailbox-cleanup unsubscribe --account=<ACCOUNT> --sender X --json` (HTTPS one-click only; `mailto:`-only senders come back under `manual_unsubscribe` for the user to unsubscribe by hand, their mail is kept) |
-| "Bounces wegräumen" | `mailbox-cleanup bounces --account=<ACCOUNT> --json` |
-| "Duplikate finden" | `mailbox-cleanup dedupe --account=<ACCOUNT> --json` |
-| "Große Anhänge zeigen" | `mailbox-cleanup attachments --account=<ACCOUNT> --size-gt 10mb --json` |
+| "Welche Accounts?" | `mailbox-autopilot config list --json` |
+| "Scan" / "Was ist drin?" | `mailbox-autopilot scan --account=<ACCOUNT> --json` |
+| "Wer schickt am meisten?" | `mailbox-autopilot senders --account=<ACCOUNT> --top 20 --json` |
+| "Lösch alles von X" | `mailbox-autopilot delete --account=<ACCOUNT> --sender X --json` (then `--apply`) |
+| "Alles älter als 1 Jahr archivieren" | `mailbox-autopilot archive --account=<ACCOUNT> --older-than 12m --json` |
+| "Vom Newsletter X abmelden" | `mailbox-autopilot unsubscribe --account=<ACCOUNT> --sender X --json` (HTTPS one-click only; `mailto:`-only senders come back under `manual_unsubscribe` for the user to unsubscribe by hand, their mail is kept) |
+| "Bounces wegräumen" | `mailbox-autopilot bounces --account=<ACCOUNT> --json` |
+| "Duplikate finden" | `mailbox-autopilot dedupe --account=<ACCOUNT> --json` |
+| "Große Anhänge zeigen" | `mailbox-autopilot attachments --account=<ACCOUNT> --size-gt 10mb --json` |
 
 ## Exit codes
 
