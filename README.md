@@ -6,7 +6,7 @@
 
 Hybrid CLI + Claude Code Skill for triaging and cleaning up an IONOS IMAP mailbox. Dry-run by default, audit-logged, soft-delete-only. Multi-account capable.
 
-[![CI](https://github.com/neckarshore-ai/imap-mailbox-cleanup/actions/workflows/ci.yml/badge.svg)](https://github.com/neckarshore-ai/imap-mailbox-cleanup/actions/workflows/ci.yml)
+[![CI](https://github.com/neckarshore-skills/imap-mailbox-cleanup/actions/workflows/ci.yml/badge.svg)](https://github.com/neckarshore-skills/imap-mailbox-cleanup/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -33,7 +33,7 @@ The CLI is useful on its own. The Skill turns it into a guided triage workflow.
 
 ```
 Claude Code Session
-  ↓ /mailbox-cleanup or natural request
+  ↓ /mailbox-autopilot:cleanup or natural request
 Claude Skill (Markdown, orchestrator)
   ↓ subprocess + JSON
 CLI: mailbox-cleanup <subcommand> [--account=<alias>] [--apply | --json]
@@ -65,7 +65,7 @@ State files (per user):
 Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) (`brew install uv`).
 
 ```bash
-git clone https://github.com/neckarshore-ai/imap-mailbox-cleanup.git
+git clone https://github.com/neckarshore-skills/imap-mailbox-cleanup.git
 cd imap-mailbox-cleanup
 uv tool install --editable .
 ```
@@ -97,14 +97,21 @@ mailbox-cleanup config set-default work
 
 > Existing v0.1 users: run any subcommand once with `--email=<your-email>` and the CLI auto-creates `~/.mailbox-cleanup/config.json` with a derived alias. After that, `--account=<alias>` is the preferred flag.
 
-### Optional: install the Claude Code Skill
+### Claude Code plugin: `mailbox-autopilot`
+
+The repository ships as a Claude Code plugin with two skills, `cleanup` (triage, archive, delete, unsubscribe) and `manage` (search, read, follow threads, draft replies into your Drafts folder), plus a send-blocking hook. The plugin never sends mail: a reply lands in Drafts and you send it from your own mail client.
+
+**Status:** the marketplace listing is pending the repository's rename to `mailbox-autopilot`. Once it is listed, install with:
 
 ```bash
-mkdir -p ~/.claude/skills/mailbox-cleanup
-cp skill/SKILL.md ~/.claude/skills/mailbox-cleanup/
+/plugin marketplace add neckarshore-skills/neckarshore-plugins
+/plugin install mailbox-autopilot@neckarshore-ai
 ```
 
-Claude Code auto-discovers skills under `~/.claude/skills/`. Invoke via `/mailbox-cleanup` in any session.
+- **Prerequisite:** `uv` on your PATH. The plugin's `bin/mailbox-autopilot` launcher runs the CLI through `uv` from the plugin folder; the first call sets up its environment there. Without `uv` it stops with exit 127 and says so.
+- **Where the command works:** inside Claude Code, the plugin puts `mailbox-autopilot` on PATH. Your own terminal does not get it. For `auth set` (which needs a real terminal) use the CLI install above, or ask Claude for the launcher's absolute path.
+- **The send-blocking hook** is a PreToolUse hook on Bash. It blocks the send routes it recognises (`smtplib`/`sendmail` in scripts, `osascript` telling Mail to send, `curl` to `smtp://`/`smtps://`) and passes ordinary commands. It is a partial second lock: an obfuscated command can get past it. The first lock is that the package contains no send code.
+- **Migrating from the old skill:** if you symlinked or copied `skill/` to `~/.claude/skills/mailbox-cleanup`, remove that entry **before** installing the plugin (`rm ~/.claude/skills/mailbox-cleanup` for a symlink). The skill now lives in `skills/cleanup/`; keeping the old entry would load it twice, and a symlink into a clone breaks as soon as that clone is updated.
 
 ## Multi-account
 
@@ -141,10 +148,11 @@ mailbox-cleanup config remove private      # also deletes Keychain password
 ### From Claude Code
 
 ```
-/mailbox-cleanup
+/mailbox-autopilot:cleanup
+/mailbox-autopilot:manage
 ```
 
-The Skill runs `auth test`, then `scan`, presents a German-language category summary, and prompts for action per category. Always shows a dry-run preview before any `--apply`.
+Or ask in plain words ("räum mein Postfach auf", "antworte auf die Mail von X"). The cleanup skill runs `auth test`, then `scan`, presents a German-language category summary, and prompts for action per category. Always shows a dry-run preview before any `--apply`.
 
 ### Standalone CLI
 
@@ -333,7 +341,11 @@ mailbox-cleanup/
 │   ├── 2026-05-04-multi-account-design.md          ← v0.2 spec
 │   ├── 2026-05-04-multi-account-implementation-plan.md  ← v0.2 TDD plan
 │   └── smoke-test.md                               ← read-only IONOS smoke test
-├── skill/SKILL.md                         ← versioned Claude Code skill copy
+├── .claude-plugin/plugin.json             ← Claude Code plugin manifest
+├── bin/mailbox-autopilot                  ← plugin launcher (runs the CLI via uv)
+├── hooks/                                 ← send-blocking PreToolUse hook
+├── skills/cleanup/SKILL.md                ← cleanup skill
+├── skills/manage/SKILL.md                 ← manage skill (search, read, draft)
 └── .github/workflows/ci.yml               ← GitHub Actions
 ```
 
