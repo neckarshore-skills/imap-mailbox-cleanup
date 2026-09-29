@@ -119,4 +119,20 @@ def test_cleanup_skill_states_the_cli_only_boundary():
     text = CLEANUP.read_text(encoding="utf-8")
     assert "Messages are moved, deleted or flagged **only through the CLI**." in text
     assert "**Never change messages outside the CLI.**" in text
-    assert "**Every `--apply` carries `--expect-count`**" in text
+    assert "**Every `delete --apply` and `move --apply` carries `--expect-count`**" in text
+
+
+def test_skill_names_exactly_the_commands_that_take_expect_count():
+    # The skill tells the agent where --expect-count goes. If a command gains or loses the
+    # flag, the skill text must change with it, or the agent passes an unknown option
+    # (click usage error, exit 2 -- which the exit-code table reads as a connection error).
+    from mailbox_cleanup.cli import cli
+
+    with_flag = {
+        name
+        for name, cmd in cli.commands.items()
+        if any(p.name == "expect_count" for p in cmd.params)
+    }
+    assert with_flag == {"delete", "move"}, with_flag
+    text = CLEANUP.read_text(encoding="utf-8")
+    assert "do not accept the flag yet" in text

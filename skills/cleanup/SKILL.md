@@ -92,9 +92,10 @@ mailbox-autopilot auth test --account=<ACCOUNT> --json
    - Always run the CLI **without `--apply`** first (dry-run)
    - Render the preview: count + first 5 sample messages
    - Ask: **"Apply?"**
-   - Only on explicit confirmation, run again with `--apply --expect-count <affected_count from the dry-run>`.
-     If the CLI answers `preview_mismatch`, the mailbox changed since the preview: show the new
-     dry-run and ask again. Never retry without `--expect-count`.
+   - Only on explicit confirmation, run again with `--apply`. For `delete` and `move`, add
+     `--expect-count <affected_count from the dry-run>`; if the CLI answers `preview_mismatch`,
+     the mailbox changed since the preview: show the new dry-run and ask again. The other
+     subcommands (`archive`, `bounces`, `dedupe`, `unsubscribe`) do not accept the flag yet.
 6. After `--apply`, show the result count and tell the user the audit log is at `~/.mailbox-cleanup/audit.log`.
 7. Loop back to step 4 for the next category.
 
@@ -174,4 +175,4 @@ A name such as "The Code" is refused. Find the sender's address in the dry-run's
 4. **All destructive operations move to Trash.** v1 has no hard-delete; if the user asks "wirklich löschen", explain that v1 only soft-deletes and Trash is purged by IONOS retention.
 5. **Never mix accounts in a single dry-run/apply pair.** If the user switches account mid-session, re-run the preview against the new account before any `--apply`.
 6. **Never change messages outside the CLI.** No script moves, deletes or flags mail. If the CLI cannot do it, stop and report the gap (see "When the CLI isn't enough").
-7. **Every `--apply` carries `--expect-count`** with the `affected_count` the user confirmed.
+7. **Every `delete --apply` and `move --apply` carries `--expect-count`** with the `affected_count` the user confirmed. No other subcommand accepts it yet; do not pass it there.
