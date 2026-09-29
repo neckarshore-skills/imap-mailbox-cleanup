@@ -1,9 +1,10 @@
 """Filter parsing and IMAP search-criteria construction."""
 
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
-from imap_tools import AND
+from imap_tools import AND, OR
 
 from ..manage.args import unsafe_arg_keys
 
@@ -27,25 +28,44 @@ def parse_age(spec: str) -> timedelta:
 
 def build_imap_search(
     *,
-    sender: str | None = None,
+    sender: str | Sequence[str] | None = None,
     subject_contains: str | None = None,
     older_than: str | None = None,
+    recipient: str | None = None,
+    category: str | None = None,
     now: datetime | None = None,
 ):
-    """Build an imap-tools AND() search criteria from the given filters."""
-    bad = unsafe_arg_keys(sender=sender, subject_contains=subject_contains)
+    """Build an imap-tools AND() search criteria from the given filters.
+
+    Several senders become one OR. `category` is filtered client-side after the fetch
+    (see selection.py); it counts as a filter here so a category-only call searches ALL.
+    """
+    senders = (sender,) if isinstance(sender, str) else tuple(sender or ())
+    senders = tuple(s for s in senders if s)
+    values = {f"sender[{i}]": s for i, s in enumerate(senders)}
+    bad = unsafe_arg_keys(**values, subject_contains=subject_contains, recipient=recipient)
     if bad:
         raise ValueError(f"control character in {', '.join(bad)} (refused before IMAP)")
-    if not any([sender, subject_contains, older_than]):
-        raise ValueError("At least one filter (sender, subject_contains, older_than) required")
+    if not any([senders, subject_contains, older_than, recipient, category]):
+        raise ValueError(
+            "At least one filter (sender, subject_contains, older_than, recipient, "
+            "category) required"
+        )
+    positional = []
     kwargs: dict = {}
-    if sender:
-        kwargs["from_"] = sender
+    if len(senders) == 1:
+        kwargs["from_"] = senders[0]
+    elif senders:
+        positional.append(OR(from_=list(senders)))
     if subject_contains:
         kwargs["subject"] = subject_contains
+    if recipient:
+        kwargs["to"] = recipient
     if older_than:
         if now is None:
             now = datetime.now(UTC)
         cutoff = (now - parse_age(older_than)).date()
         kwargs["date_lt"] = cutoff
-    return AND(**kwargs)
+    if not positional and not kwargs:
+        kwargs["all"] = True
+    return AND(*positional, **kwargs)

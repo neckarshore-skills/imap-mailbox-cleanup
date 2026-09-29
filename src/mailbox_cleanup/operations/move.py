@@ -1,8 +1,11 @@
 """Move operation — same filter set as delete, but explicit target folder."""
 
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 
-from .filters import build_imap_search
+from .batching import move_in_batches
+from .delete import check_expected, sample_of
+from .selection import select_messages
 
 
 @dataclass
@@ -12,6 +15,8 @@ class MoveResult:
     target_folder: str
     folder: str
     sample: list[dict]
+    kept_count: int = 0
+    by_sender: dict[str, int] = field(default_factory=dict)
 
 
 def run_move(
@@ -19,29 +24,38 @@ def run_move(
     *,
     folder: str,
     target: str,
-    sender: str | None = None,
+    sender: str | Sequence[str] | None = None,
     subject_contains: str | None = None,
     older_than: str | None = None,
+    recipient: str | None = None,
+    category: str | None = None,
+    keep: Iterable[str] = (),
     apply: bool = False,
     limit: int | None = None,
+    expect_count: int | None = None,
 ) -> MoveResult:
-    mb.folder.set(folder)
-    criteria = build_imap_search(
+    sel = select_messages(
+        mb,
+        folder=folder,
         sender=sender,
         subject_contains=subject_contains,
         older_than=older_than,
+        recipient=recipient,
+        category=category,
+        keep=keep,
+        limit=limit,
     )
-    msgs = list(mb.fetch(criteria, headers_only=True, mark_seen=False, limit=limit, bulk=True))
-    uids = [m.uid for m in msgs if m.uid]
-    sample = [
-        {"uid": m.uid, "from": m.from_, "subject": m.subject, "date": str(m.date)} for m in msgs[:5]
-    ]
-    if apply and uids:
-        mb.move(uids, target)
+    uids = [m.uid for m in sel.messages]
+    if apply:
+        check_expected(expect_count, len(uids))
+        if uids:
+            move_in_batches(mb, uids, target)
     return MoveResult(
         affected_uids=uids,
         dry_run=not apply,
         target_folder=target,
         folder=folder,
-        sample=sample,
+        sample=sample_of(sel.messages),
+        kept_count=sel.kept_count,
+        by_sender=sel.by_sender,
     )

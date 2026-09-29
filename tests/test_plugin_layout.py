@@ -89,3 +89,34 @@ def test_skills_call_the_launcher_not_the_bare_cli():
     for path in (MANAGE, CLEANUP):
         hits = [ln for ln in path.read_text(encoding="utf-8").splitlines() if bare.search(ln)]
         assert not hits, f"{path.name}: {hits}"
+
+
+# #53: the skills are read by an agent every session. A code example that changes mail
+# is an instruction to change mail outside the CLI, so no skill file may carry one.
+SKILL_FILES = sorted((ROOT / "skills").glob("*/SKILL.md")) + sorted((ROOT / "skill").glob("*.md"))
+DESTRUCTIVE_IN_SKILLS = [
+    r"\.move\(",
+    r"\.delete\(",
+    r"\.expunge\(",
+    r"\.flag\(",
+    r"""["'](?i:move|store|expunge)["']""",
+    r"(?i)[+-]FLAGS",
+]
+
+
+def test_no_skill_file_carries_a_mail_changing_code_example():
+    assert len(SKILL_FILES) >= 2, SKILL_FILES  # no vacuous pass
+    offenders = [
+        f"{p.relative_to(ROOT)}: {rx}"
+        for p in SKILL_FILES
+        for rx in DESTRUCTIVE_IN_SKILLS
+        if re.search(rx, p.read_text(encoding="utf-8"))
+    ]
+    assert offenders == [], offenders
+
+
+def test_cleanup_skill_states_the_cli_only_boundary():
+    text = CLEANUP.read_text(encoding="utf-8")
+    assert "Messages are moved, deleted or flagged **only through the CLI**." in text
+    assert "**Never change messages outside the CLI.**" in text
+    assert "**Every `--apply` carries `--expect-count`**" in text

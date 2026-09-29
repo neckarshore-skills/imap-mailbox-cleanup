@@ -15,6 +15,11 @@ def _audit_path() -> Path:
     return Path(override) if override else DEFAULT_AUDIT_LOG
 
 
+def _require_str_result(result: object) -> None:
+    if not isinstance(result, str):
+        raise TypeError(f"audit result must be a string, got {type(result).__name__}")
+
+
 def log_action(
     *,
     subcommand: str,
@@ -28,7 +33,10 @@ def log_action(
     """Append one JSON-line record describing an applied action.
 
     `account` is the alias of the account the action was performed against.
+    `result` is always a string ("success", "partial_failure", "error"); readers
+    compare it as one, so a structured value would read as an unknown outcome (#51).
     """
+    _require_str_result(result)
     record: dict[str, object] = {
         "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "subcommand": subcommand,
@@ -58,6 +66,7 @@ def log_manage_action(
 ) -> None:
     """Manage-layer record (spec §5): argument KEYS only, never values, because
     search values are names and topics."""
+    _require_str_result(result)
     record: dict[str, object] = {
         "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "subcommand": subcommand,

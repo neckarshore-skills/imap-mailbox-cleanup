@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from ..folders import resolve_folder
+from .batching import move_in_batches
 
 
 @dataclass
@@ -49,7 +50,7 @@ def run_dedupe(mb, *, folder: str = "INBOX", apply: bool = False) -> DedupeResul
     if apply and drop_uids:
         if not target:
             raise RuntimeError("Could not resolve Trash folder.")
-        mb.move(drop_uids, target)
+        move_in_batches(mb, drop_uids, target)
 
     return DedupeResult(
         dry_run=not apply,

@@ -30,10 +30,12 @@ from .manage.args import unsafe_arg_keys
 from .manage.cli import manage as _manage_group
 from .operations.archive import run_archive
 from .operations.attachments import run_attachments
+from .operations.batching import PartialMoveError, move_in_batches
 from .operations.bounces import run_bounces
 from .operations.dedupe import run_dedupe
-from .operations.delete import run_delete
+from .operations.delete import PreviewMismatchError, run_delete
 from .operations.move import run_move
+from .operations.selection import CATEGORIES
 from .operations.unsubscribe import (
     UnsubAction,
     collect_unsub_targets,
@@ -48,7 +50,8 @@ def _no_control(ctx, param, value):
     imap_tools escapes only `\\` and `"`; a CR/LF would end the IMAP command line and let
     the rest run as a new command (for these commands: a smuggled DELETE or MOVE).
     """
-    if value is not None and unsafe_arg_keys(value=value):
+    values = value if isinstance(value, tuple) else (value,)
+    if any(v is not None and unsafe_arg_keys(value=v) for v in values):
         raise click.BadParameter("contains a control character (refused before connecting)")
     return value
 
@@ -450,13 +453,14 @@ def senders_cmd(account_flag, email_flag, folder: str, top: int, json_mode: bool
             click.echo(f"{entry['count']:6d}  {entry['sender']}")
 
 
-def _require_filter(sender, subject_contains, older_than, json_mode):
-    if not any([sender, subject_contains, older_than]):
+def _require_filter(sender, subject_contains, older_than, json_mode, recipient=None, category=None):
+    if not any([sender, subject_contains, older_than, recipient, category]):
         _fail(
             {
                 "error_code": "bad_args",
                 "message": (
-                    "At least one filter required (--sender / --subject-contains / --older-than)"
+                    "At least one filter required (--sender / --subject-contains / "
+                    "--older-than / --recipient / --category)"
                 ),
             },
             4,
@@ -464,14 +468,136 @@ def _require_filter(sender, subject_contains, older_than, json_mode):
         )
 
 
+def _selection_options(f):
+    """Filters shared by delete and move (#50). Applied bottom-up by click."""
+    f = click.option(
+        "--expect-count",
+        type=int,
+        default=None,
+        help="With --apply: the affected_count the user confirmed. Refuses if it changed.",
+    )(f)
+    f = click.option("--limit", default=None, type=int)(f)
+    f = click.option(
+        "--keep",
+        multiple=True,
+        callback=_no_control,
+        help="Never act on this sender: full address or @domain (subdomains included). Repeatable.",
+    )(f)
+    f = click.option(
+        "--category",
+        type=click.Choice(sorted(CATEGORIES)),
+        default=None,
+        help="Only messages the classifier puts in this category.",
+    )(f)
+    f = click.option("--older-than", default=None, help="e.g. 30d, 2w, 3m, 1y")(f)
+    f = click.option("--recipient", default=None, callback=_no_control, help="To: address.")(f)
+    f = click.option("--subject-contains", default=None, callback=_no_control)(f)
+    f = click.option(
+        "--sender", multiple=True, callback=_no_control, help="Repeatable; any of them matches."
+    )(f)
+    return f
+
+
+def _selection_args(sender, subject_contains, older_than, recipient, category, keep, limit):
+    return {
+        "sender": list(sender),
+        "subject_contains": subject_contains,
+        "older_than": older_than,
+        "recipient": recipient,
+        "category": category,
+        "keep": list(keep),
+        "limit": limit,
+    }
+
+
+def _run_selection_action(*, subcommand, account, json_mode, apply, folder, args, run, text_target):
+    """Shared body of delete and move: run, map errors to exit codes, audit, emit."""
+    try:
+        with imap_connect(account[1], port=account[0].port) as mb:
+            res = run(mb)
+    except PreviewMismatchError as e:
+        _fail(
+            {
+                "error_code": "preview_mismatch",
+                "message": str(e),
+                "expected": e.expected,
+                "found": e.found,
+            },
+            4,
+            json_mode,
+        )
+        return
+    except PartialMoveError as e:
+        log_action(
+            subcommand=subcommand,
+            account=account[0].alias,
+            args=args,
+            folder=folder,
+            affected_uids=e.moved,
+            result="partial_failure",
+            error=type(e.cause).__name__,
+        )
+        _fail(
+            {
+                "error_code": "partial_failure",
+                "message": str(e),
+                "moved_count": len(e.moved),
+                "not_moved_count": len(e.remaining),
+            },
+            5,
+            json_mode,
+        )
+        return
+    except ValueError as e:
+        _fail({"error_code": "bad_args", "message": str(e)}, 4, json_mode)
+        return
+    except Exception as e:
+        _fail({"error_code": "operation_error", "message": str(e)}, 2, json_mode)
+        return
+    payload = {
+        "ok": True,
+        "schema_version": SCHEMA_VERSION,
+        "subcommand": subcommand,
+        "dry_run": res.dry_run,
+        "folder": res.folder,
+        "target_folder": res.target_folder,
+        "affected_count": len(res.affected_uids),
+        "affected_uids": res.affected_uids,
+        "kept_count": res.kept_count,
+        "by_sender": res.by_sender,
+        "sample": res.sample,
+    }
+    if apply:
+        log_action(
+            subcommand=subcommand,
+            account=account[0].alias,
+            args=args,
+            folder=folder,
+            affected_uids=res.affected_uids,
+            result="success",
+        )
+    if json_mode:
+        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        verb = "Moved" if apply else "Would move"
+        click.echo(f"{verb} {len(res.affected_uids)} messages to {text_target(res)!r}")
+
+
+def _resolve(account_flag, email_flag, json_mode):
+    try:
+        return resolve_account_and_credentials(account_flag=account_flag, email_flag=email_flag)
+    except AccountFlagsError as e:
+        _fail({"error_code": e.error_code, "message": str(e)}, 4, json_mode)
+    except AuthMissingError as e:
+        _fail({"error_code": "auth_missing", "message": str(e)}, 3, json_mode)
+    return None
+
+
 @cli.command("delete")
 @click.option("--account", "account_flag", default=None, help="Alias or email.")
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
 @click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
-@click.option("--sender", default=None, callback=_no_control)
-@click.option("--subject-contains", default=None, callback=_no_control)
-@click.option("--older-than", default=None, help="e.g. 30d, 2w, 3m, 1y")
-@click.option("--limit", default=None, type=int)
+@_selection_options
 @click.option(
     "--apply",
     is_flag=True,
@@ -484,67 +610,44 @@ def delete_cmd(
     folder,
     sender,
     subject_contains,
+    recipient,
     older_than,
+    category,
+    keep,
     limit,
+    expect_count,
     apply,
     json_mode,
 ):
     """Soft-delete messages matching filter (move to Trash)."""
-    _require_filter(sender, subject_contains, older_than, json_mode)
-    try:
-        account, creds = resolve_account_and_credentials(
-            account_flag=account_flag, email_flag=email_flag
-        )
-    except AccountFlagsError as e:
-        _fail({"error_code": e.error_code, "message": str(e)}, 4, json_mode)
+    _require_filter(sender, subject_contains, older_than, json_mode, recipient, category)
+    resolved = _resolve(account_flag, email_flag, json_mode)
+    if resolved is None:
         return
-    except AuthMissingError as e:
-        _fail({"error_code": "auth_missing", "message": str(e)}, 3, json_mode)
-        return
-    try:
-        with imap_connect(creds, port=account.port) as mb:
-            res = run_delete(
-                mb,
-                folder=folder,
-                sender=sender,
-                subject_contains=subject_contains,
-                older_than=older_than,
-                apply=apply,
-                limit=limit,
-            )
-    except Exception as e:
-        _fail({"error_code": "operation_error", "message": str(e)}, 2, json_mode)
-        return
-    payload = {
-        "ok": True,
-        "schema_version": SCHEMA_VERSION,
-        "subcommand": "delete",
-        "dry_run": res.dry_run,
-        "folder": res.folder,
-        "target_folder": res.target_folder,
-        "affected_count": len(res.affected_uids),
-        "affected_uids": res.affected_uids,
-        "sample": res.sample,
-    }
-    if apply:
-        log_action(
-            subcommand="delete",
-            account=account.alias,
-            args={
-                "sender": sender,
-                "subject_contains": subject_contains,
-                "older_than": older_than,
-                "limit": limit,
-            },
+    _run_selection_action(
+        subcommand="delete",
+        account=resolved,
+        json_mode=json_mode,
+        apply=apply,
+        folder=folder,
+        args=_selection_args(
+            sender, subject_contains, older_than, recipient, category, keep, limit
+        ),
+        run=lambda mb: run_delete(
+            mb,
             folder=folder,
-            affected_uids=res.affected_uids,
-            result="success",
-        )
-    if json_mode:
-        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-    else:
-        verb = "Moved" if apply else "Would move"
-        click.echo(f"{verb} {len(res.affected_uids)} messages to {res.target_folder!r}")
+            sender=sender,
+            subject_contains=subject_contains,
+            older_than=older_than,
+            recipient=recipient,
+            category=category,
+            keep=keep,
+            apply=apply,
+            limit=limit,
+            expect_count=expect_count,
+        ),
+        text_target=lambda res: res.target_folder,
+    )
 
 
 @cli.command("move")
@@ -552,10 +655,7 @@ def delete_cmd(
 @click.option("--email", "email_flag", default=None, help="Deprecated; use --account.")
 @click.option("--folder", default="INBOX", show_default=True, callback=_no_control)
 @click.option("--to", "target", required=True, help="Destination folder.", callback=_no_control)
-@click.option("--sender", default=None, callback=_no_control)
-@click.option("--subject-contains", default=None, callback=_no_control)
-@click.option("--older-than", default=None)
-@click.option("--limit", default=None, type=int)
+@_selection_options
 @click.option("--apply", is_flag=True)
 @click.option("--json", "json_mode", is_flag=True)
 def move_cmd(
@@ -565,69 +665,44 @@ def move_cmd(
     target,
     sender,
     subject_contains,
+    recipient,
     older_than,
+    category,
+    keep,
     limit,
+    expect_count,
     apply,
     json_mode,
 ):
     """Move messages matching filter to target folder."""
-    _require_filter(sender, subject_contains, older_than, json_mode)
-    try:
-        account, creds = resolve_account_and_credentials(
-            account_flag=account_flag, email_flag=email_flag
-        )
-    except AccountFlagsError as e:
-        _fail({"error_code": e.error_code, "message": str(e)}, 4, json_mode)
+    _require_filter(sender, subject_contains, older_than, json_mode, recipient, category)
+    resolved = _resolve(account_flag, email_flag, json_mode)
+    if resolved is None:
         return
-    except AuthMissingError as e:
-        _fail({"error_code": "auth_missing", "message": str(e)}, 3, json_mode)
-        return
-    try:
-        with imap_connect(creds, port=account.port) as mb:
-            res = run_move(
-                mb,
-                folder=folder,
-                target=target,
-                sender=sender,
-                subject_contains=subject_contains,
-                older_than=older_than,
-                apply=apply,
-                limit=limit,
-            )
-    except Exception as e:
-        _fail({"error_code": "operation_error", "message": str(e)}, 2, json_mode)
-        return
-    payload = {
-        "ok": True,
-        "schema_version": SCHEMA_VERSION,
-        "subcommand": "move",
-        "dry_run": res.dry_run,
-        "folder": res.folder,
-        "target_folder": res.target_folder,
-        "affected_count": len(res.affected_uids),
-        "affected_uids": res.affected_uids,
-        "sample": res.sample,
-    }
-    if apply:
-        log_action(
-            subcommand="move",
-            account=account.alias,
-            args={
-                "to": target,
-                "sender": sender,
-                "subject_contains": subject_contains,
-                "older_than": older_than,
-                "limit": limit,
-            },
+    args = _selection_args(sender, subject_contains, older_than, recipient, category, keep, limit)
+    _run_selection_action(
+        subcommand="move",
+        account=resolved,
+        json_mode=json_mode,
+        apply=apply,
+        folder=folder,
+        args={"to": target, **args},
+        run=lambda mb: run_move(
+            mb,
             folder=folder,
-            affected_uids=res.affected_uids,
-            result="success",
-        )
-    if json_mode:
-        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
-    else:
-        verb = "Moved" if apply else "Would move"
-        click.echo(f"{verb} {len(res.affected_uids)} messages to {target!r}")
+            target=target,
+            sender=sender,
+            subject_contains=subject_contains,
+            older_than=older_than,
+            recipient=recipient,
+            category=category,
+            keep=keep,
+            apply=apply,
+            limit=limit,
+            expect_count=expect_count,
+        ),
+        text_target=lambda res: res.target_folder,
+    )
 
 
 @cli.command("archive")
@@ -826,7 +901,7 @@ def unsubscribe_cmd(account_flag, email_flag, folder, sender, apply, json_mode):
                 if not manual:
                     trash = resolve_folder(mb, "trash")
                     if trash and uids:
-                        mb.move(uids, trash)
+                        move_in_batches(mb, uids, trash)
     except Exception as e:
         _fail({"error_code": "operation_error", "message": str(e)}, 2, json_mode)
         return

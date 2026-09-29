@@ -529,7 +529,9 @@ Never use `pull_request_target` here: it would hand the secret to fork code. Dep
 The CI gate sees only added lines, so content already in the repository is never scanned by it. Measured 2026-09-24: the owner's own domain appears in eight tracked files (README, two May design documents, `pyproject.toml`, four test files), and the May test fixtures use real-looking domains. Only the Founder holds the private list, so only he can run the full check:
 
 ```bash
-LEAK_GUARD_PRIVATE_LIST="$(cat <path-to-private-list>)" git ls-files -z | xargs -0 python3 scripts/leak_guard.py
+git ls-files -z | LEAK_GUARD_PRIVATE_LIST="$(cat <path-to-private-list>)" xargs -0 python3 scripts/leak_guard.py
+# The variable goes before xargs: set before `git ls-files`, it never reaches Python
+# and the run silently checks public patterns only (corrected 2026-09-29).
 ```
 
 He decides what gets cleaned up, as a separate PR with its own acceptance. This plan does not rewrite legacy content. Later tasks move only the legacy lines they touch to `example.*` addresses, and the added-lines gate enforces that by itself.
