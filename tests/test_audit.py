@@ -103,3 +103,23 @@ def test_manage_record_has_no_args(tmp_path, monkeypatch):
     assert "args" not in rec
     assert rec["arg_keys"] == ["sender", "subject"]
     assert rec["affected_uids"] == ["1", "2"]
+
+
+@pytest.mark.parametrize("writer", ["action", "manage"])
+def test_result_must_be_a_string(tmp_audit, writer):
+    # #51: ad-hoc records carried result={"moved": n, ...}; readers compare a string.
+    with pytest.raises(TypeError):
+        if writer == "action":
+            log_action(
+                subcommand="delete",
+                account="a",
+                args={},
+                folder="INBOX",
+                affected_uids=["1"],
+                result={"moved": 1},
+            )
+        else:
+            log_manage_action(
+                subcommand="manage.search", account="a", folder="INBOX", uids=[], result={"x": 1}
+            )
+    assert not tmp_audit.exists()

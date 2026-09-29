@@ -1,6 +1,6 @@
 [project]
 name = "mailbox-cleanup"
-version = "0.2.0"
+version = "0.2.1"
 description = "Hybrid CLI + Claude Skill to clean up an IONOS IMAP mailbox"
 requires-python = ">=3.11"
 license = "MIT"

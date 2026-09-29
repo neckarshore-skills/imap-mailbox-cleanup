@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from imap_tools import AND
 
 from ..folders import resolve_folder
+from .batching import move_in_batches
 from .filters import parse_age
 
 
@@ -56,6 +57,6 @@ def run_archive(
                     mb.folder.create(target)
                 except Exception:
                     pass
-            mb.move(uids, target)
+            move_in_batches(mb, uids, target)
 
     return ArchiveResult(dry_run=not apply, folder=folder, archive_root=archive_root, groups=groups)

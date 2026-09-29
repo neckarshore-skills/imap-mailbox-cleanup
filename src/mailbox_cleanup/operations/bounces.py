@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from ..classify import is_bounce
 from ..folders import resolve_folder
+from .batching import move_in_batches
 
 
 @dataclass
@@ -29,7 +30,7 @@ def run_bounces(mb, *, folder: str = "INBOX", apply: bool = False) -> BouncesRes
     if apply and uids:
         if not target:
             raise RuntimeError("Could not resolve Trash folder.")
-        mb.move(uids, target)
+        move_in_batches(mb, uids, target)
     return BouncesResult(
         dry_run=not apply,
         folder=folder,

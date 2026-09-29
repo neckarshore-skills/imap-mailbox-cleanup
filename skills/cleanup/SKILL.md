@@ -92,7 +92,10 @@ mailbox-autopilot auth test --account=<ACCOUNT> --json
    - Always run the CLI **without `--apply`** first (dry-run)
    - Render the preview: count + first 5 sample messages
    - Ask: **"Apply?"**
-   - Only on explicit confirmation, run again with `--apply`
+   - Only on explicit confirmation, run again with `--apply`. For `delete` and `move`, add
+     `--expect-count <affected_count from the dry-run>`; if the CLI answers `preview_mismatch`,
+     the mailbox changed since the preview: show the new dry-run and ask again. The other
+     subcommands (`archive`, `bounces`, `dedupe`, `unsubscribe`) do not accept the flag yet.
 6. After `--apply`, show the result count and tell the user the audit log is at `~/.mailbox-cleanup/audit.log`.
 7. Loop back to step 4 for the next category.
 
@@ -106,6 +109,10 @@ Replace `<ACCOUNT>` with the chosen alias (or omit the `--account` flag when onl
 | "Scan" / "Was ist drin?" | `mailbox-autopilot scan --account=<ACCOUNT> --json` |
 | "Wer schickt am meisten?" | `mailbox-autopilot senders --account=<ACCOUNT> --top 20 --json` |
 | "Lösch alles von X" | `mailbox-autopilot delete --account=<ACCOUNT> --sender X --json` (then `--apply`) |
+| "Alle Newsletter älter als 2 Tage, außer X und Y" | `mailbox-autopilot delete --account=<ACCOUNT> --category newsletter --older-than 2d --keep x@example.com --keep @example.org --json` |
+| "Diese Absender weg" (several) | `mailbox-autopilot delete --account=<ACCOUNT> --sender a@example.com --sender b@example.com --json` |
+| "Alles an Adresse X" | `mailbox-autopilot delete --account=<ACCOUNT> --recipient x@example.com --json` |
+| "Alle Newsletter ins Archiv" | `mailbox-autopilot move --account=<ACCOUNT> --to Archiv --category newsletter --json` |
 | "Alles älter als 1 Jahr archivieren" | `mailbox-autopilot archive --account=<ACCOUNT> --older-than 12m --json` |
 | "Vom Newsletter X abmelden" | `mailbox-autopilot unsubscribe --account=<ACCOUNT> --sender X --json` (HTTPS one-click only; `mailto:`-only senders come back under `manual_unsubscribe` for the user to unsubscribe by hand, their mail is kept) |
 | "Bounces wegräumen" | `mailbox-autopilot bounces --account=<ACCOUNT> --json` |
@@ -119,69 +126,46 @@ Replace `<ACCOUNT>` with the chosen alias (or omit the `--account` flag when onl
 | 0 | Success | Continue |
 | 2 | Connection error | Show stderr, do not retry blindly |
 | 3 | Auth missing | Tell user to run `auth set` in a real terminal |
-| 4 | Bad arguments / account resolution (`no_account_selected`, `unknown_account`, `duplicate_alias`, `duplicate_email`, `bootstrap_failed`) | Show stderr; re-check `config list --json` if needed |
-| 5 | Partial failure / config error (`no_config`, `config_corrupt`, `schema_version_unsupported`) | Show audit log path, summarize successes/failures |
+| 4 | Bad arguments / account resolution (`bad_args`, `no_account_selected`, `unknown_account`, `duplicate_alias`, `duplicate_email`, `bootstrap_failed`) | Show stderr; re-check `config list --json` if needed |
+| 4 | `preview_mismatch`: the set changed since the dry-run; nothing was moved | Run the dry-run again, show the new count, ask again |
+| 5 | Partial failure / config error (`partial_failure`, `no_config`, `config_corrupt`, `schema_version_unsupported`) | For `partial_failure`: tell the user `moved_count` moved and `not_moved_count` did not; the audit record names the moved UIDs. Do not retry automatically |
 
 ## Audit log
 
 Path: `~/.mailbox-cleanup/audit.log`. Append-only JSONL, one record per `--apply` action. Each record now includes an `account` field identifying which alias performed the action. Treat `account` as **optional** for backward compatibility — v0.1 entries pre-date the multi-account schema and may not have it.
 
-## When the CLI isn't enough — ad-hoc Python
+## When the CLI isn't enough — stop and report
 
-Some operations are beyond the CLI subcommands: creating folders, cross-folder bulk scans, date-range deletions across all folders, or subject-keyword classification. Use `uv run python3 -` from the project directory (system Python lacks `keyring`):
+Messages are moved, deleted or flagged **only through the CLI**. The CLI is what gives
+the user a dry-run, the `--expect-count` binding and an audit record; a script has none
+of them, however carefully it is written.
 
-```python
-from imap_tools import MailBox, A
-import keyring, json
-from pathlib import Path
-from datetime import date
+If the user asks for something no subcommand or filter can express:
 
-cfg = json.loads(Path("~/.mailbox-cleanup/config.json".replace("~", str(Path.home()))).read_text())
-acct = next(a for a in cfg["accounts"] if a["alias"] == "<ALIAS>")
-pw = keyring.get_password("mailbox-cleanup", acct["email"])
+1. Say so plainly: which part of the request the CLI cannot do.
+2. Offer the closest CLI route, if there is one, and show its dry-run.
+3. Name the gap as a missing CLI capability, so it can be built: the repository is
+   `neckarshore-skills/imap-mailbox-cleanup`.
 
-with MailBox(acct["server"]).login(acct["email"], pw) as mb:
-    # create a folder
-    mb.folder.create("Archiv vor 2025/Neuanmeldungen")
+Do **not** write Python or IMAP code that changes messages. That includes `imap_tools`
+calls that move, delete, flag or expunge, and raw `MOVE` / `STORE` / `EXPUNGE` commands.
 
-    # switch folder and search
-    mb.folder.set("INBOX")
-    uids = mb.uids(A(date_lt=date(2023, 1, 1)))
-
-    # move in batches of 500 (required for >500 UIDs — see Batching below)
-    for i in range(0, len(uids), 500):
-        mb.move(uids[i:i+500], "Papierkorb")
-```
-
-**Always do a count-only run first** (no `mb.move`), show the number to the user, ask for confirmation, then apply. This is the ad-hoc equivalent of the CLI dry-run rule.
+Read-only ad-hoc work is allowed when the CLI has no read command for it, for example
+counting messages across all folders, or grouping a folder by recipient address. Run it
+with `uv run python3 -` from the plugin directory (system Python lacks `keyring`), read
+only, and never write to the audit log.
 
 ### IMAP Search Umlaut trap
 
-`A(subject="Verlängerung")` → `UnicodeEncodeError: 'ascii' codec can't encode character`. IMAP SEARCH is ASCII-only. Workarounds:
+IMAP SEARCH is ASCII-only, so `--subject-contains "Verlängerung"` cannot match. Use the
+ASCII transliteration (`Verlaengerung`) or the English word from a bilingual subject
+(`Renewal`, `Extension`).
 
-- Use the ASCII transliteration: `"Verlaengerung"`
-- Use the English equivalent from bilingual subjects: `"Renewal"`, `"Extension"`, `"Signup"`
-- Combine multiple keyword searches and union the UID sets
+## Keep-lists
 
-### Batching for large moves
-
-`mb.move(uids, folder)` times out or errors on large UID lists. Always batch at 500:
-
-```python
-for i in range(0, len(uids), 500):
-    mb.move(uids[i:i+500], target_folder)
-```
-
-### Cross-folder scan pattern
-
-```python
-SKIP = {"Papierkorb", "Entwürfe", "Spam"}
-for folder in [f.name for f in mb.folder.list() if f.name not in SKIP]:
-    mb.folder.set(folder)
-    uids = mb.uids(A(from_="facebookmail.com"))
-    if uids:
-        mb.move(uids, "Papierkorb")
-```
+`--keep` takes a full address or a domain written as `@example.com` (subdomains included).
+A name such as "The Code" is refused. Find the sender's address in the dry-run's
+`by_sender` block, show it to the user, and pass that address.
 
 ## Hard rules
 
@@ -190,3 +174,5 @@ for folder in [f.name for f in mb.folder.list() if f.name not in SKIP]:
 3. **Never edit the audit log.** It is append-only forensics.
 4. **All destructive operations move to Trash.** v1 has no hard-delete; if the user asks "wirklich löschen", explain that v1 only soft-deletes and Trash is purged by IONOS retention.
 5. **Never mix accounts in a single dry-run/apply pair.** If the user switches account mid-session, re-run the preview against the new account before any `--apply`.
+6. **Never change messages outside the CLI.** No script moves, deletes or flags mail. If the CLI cannot do it, stop and report the gap (see "When the CLI isn't enough").
+7. **Every `delete --apply` and `move --apply` carries `--expect-count`** with the `affected_count` the user confirmed. No other subcommand accepts it yet; do not pass it there.

@@ -174,6 +174,19 @@ mailbox-cleanup delete \
   --older-than 6m \
   --apply
 
+# Newsletters older than 2 days, except two senders you keep.
+# The dry-run reports affected_count, kept_count and a by_sender breakdown.
+mailbox-cleanup delete --account=work --category newsletter --older-than 2d \
+  --keep "billing@example.com" --keep "@example.org"
+
+# Apply only the set you confirmed: refuses (preview_mismatch) if it changed
+mailbox-cleanup delete --account=work --category newsletter --older-than 2d \
+  --keep "billing@example.com" --keep "@example.org" --apply --expect-count 1388
+
+# Several senders at once, or everything sent to one address
+mailbox-cleanup delete --account=work --sender "a@example.com" --sender "b@example.com"
+mailbox-cleanup delete --account=work --recipient "alias@example.net"
+
 # Move (e.g. invoices to a tax folder)
 mailbox-cleanup move \
   --account=work \
@@ -213,8 +226,8 @@ If only one account is configured, `--account` can be omitted.
 | `config remove` | Delete account from config + remove Keychain password | `<alias>` | n/a |
 | `scan` | Discovery — classify INBOX, return JSON report | `--folder=INBOX` (default) | n/a (read-only) |
 | `senders` | List top-N senders by count | `--top=50` | n/a (read-only) |
-| `delete` | Soft-delete (move to Trash) by filter | one of `--sender=` / `--subject-contains=` / `--older-than=` | yes |
-| `move` | Move by filter to target folder | `--from-filter=...`, `--to=Folder` | yes |
+| `delete` | Soft-delete (move to Trash) by filter | one of `--sender=` (repeatable) / `--subject-contains=` / `--older-than=` / `--recipient=` / `--category=`; optional `--keep=` (repeatable), `--expect-count=` | yes |
+| `move` | Move by filter to target folder | `--to=Folder` plus the same filters as `delete` | yes |
 | `archive` | Bulk-move messages older than N → `Archive/YYYY` | `--older-than=12m` | yes |
 | `unsubscribe` | Parse `List-Unsubscribe` header, execute HTTPS one-click only; `mailto:`-only senders are listed under `manual_unsubscribe` and their mail is kept (the package sends no mail) | `--sender=` | yes |
 | `dedupe` | Drop Message-ID duplicates, keep oldest | `--folder=` | yes |
@@ -225,7 +238,15 @@ If only one account is configured, `--account` can be omitted.
 
 **Time syntax for `--older-than`:** `Nd` / `Nw` / `Nm` / `Ny` (days / weeks / months / years).
 
-**Filter combinability:** `delete --account=work --sender=X --older-than=3m --apply` (AND across filters).
+**Filter combinability:** `delete --account=work --sender=X --older-than=3m --apply` (AND across filters; several `--sender` values are OR'ed among themselves).
+
+**Categories (`--category`):** `newsletter`, `automated`, `bounce` — the same classifier `scan` uses, applied to the fetched headers. `--limit` counts after the category and keep-list filters.
+
+**Keep-list (`--keep`):** a full address, or a domain written `@example.com` (its subdomains are kept too). Bare words are refused: a substring match on a name would keep things nobody can predict.
+
+**Preview binding (`--expect-count`):** with `--apply`, pass the `affected_count` the dry-run showed. If the matching set changed size in between, nothing moves and the CLI exits 4 with `preview_mismatch`.
+
+**Large moves** run in batches of 500. If a batch fails, the CLI exits 5 with `partial_failure`, reports `moved_count` and `not_moved_count`, and the audit record lists exactly the UIDs that moved.
 
 ## Discovery report (`scan --json`)
 
@@ -274,6 +295,10 @@ Format: one JSON object per line. The `account` field identifies which alias per
 ```json
 {"timestamp":"2026-05-04T09:27:45.504Z","account":"work","subcommand":"delete","args":{"sender":"service@paypal.de","older_than":"2m"},"folder":"INBOX","affected_uids":["655773","672257"],"result":"success"}
 ```
+
+Fields: `timestamp` (UTC, ISO 8601), `account`, `subcommand` (a CLI subcommand name), `args` (the filter values; `manage.*` records carry `arg_keys` instead), `folder`, `affected_uids`, `result` — always a string: `success`, `partial_failure` or `error` — and `error` (an error code) when the action did not fully succeed.
+
+Only the CLI writes this file. Read-only ad-hoc scripts do not log, and nothing else may append to it.
 
 Inspect with `jq`:
 
