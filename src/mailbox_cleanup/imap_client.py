@@ -29,18 +29,20 @@ def imap_connect(
     if ssl is None:
         ssl = os.environ.get(SSL_ENV, "1") != "0"
     Cls = MailBox if ssl else MailBoxUnencrypted
+    # Only connect + login are retried. The body runs once: an exception from it must
+    # reach the caller unchanged, never be caught here and "retried" by yielding again.
     for attempt in range(max_retries + 1):
         try:
             mb = Cls(creds.server, port=port).login(creds.email, creds.password)
-            try:
-                yield mb
-            finally:
-                mb.logout()
-            return
+            break
         except Exception as e:
             if attempt < max_retries:
                 time.sleep(2 ** (attempt + 1))
-            else:
-                raise IMAPConnectionError(
-                    f"Failed to connect to {creds.server}:{port} as {creds.email}: {e}"
-                ) from e
+                continue
+            raise IMAPConnectionError(
+                f"Failed to connect to {creds.server}:{port} as {creds.email}: {e}"
+            ) from e
+    try:
+        yield mb
+    finally:
+        mb.logout()
