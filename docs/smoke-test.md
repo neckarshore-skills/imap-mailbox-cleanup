@@ -45,7 +45,7 @@
 6. **Dry-run delete (no --apply!)**
 
    ```bash
-   mailbox-autopilot delete --email you@example.com --sender notifications@github.com --json | jq '.dry_run, .affected_count'
+   mailbox-autopilot delete --email you@example.com --sender notifications@example.com --json | jq '.dry_run, .affected_count'
    ```
    Expected: `true` and a count. Mailbox is unchanged.
 

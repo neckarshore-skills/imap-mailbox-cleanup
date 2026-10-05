@@ -164,10 +164,10 @@ mailbox-autopilot scan --account=work --json
 mailbox-autopilot senders --account=work --top 50
 
 # Dry-run delete (preview only)
-mailbox-autopilot delete --account=work --sender "newsletter@x.com"
+mailbox-autopilot delete --account=work --sender "newsletter@example.com"
 
 # Apply
-mailbox-autopilot delete --account=work --sender "newsletter@x.com" --apply
+mailbox-autopilot delete --account=work --sender "newsletter@example.com" --apply
 
 # Combine filters (AND)
 mailbox-autopilot delete \
@@ -200,7 +200,7 @@ mailbox-autopilot move \
 mailbox-autopilot archive --account=work --older-than 12m --apply
 
 # Unsubscribe (RFC 2369 / RFC 8058 one-click)
-mailbox-autopilot unsubscribe --account=work --sender "newsletter@x.com" --apply
+mailbox-autopilot unsubscribe --account=work --sender "newsletter@example.com" --apply
 
 # Dedupe by Message-ID (keeps oldest)
 mailbox-autopilot dedupe --account=work --apply
