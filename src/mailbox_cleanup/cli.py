@@ -71,7 +71,7 @@ def _fail(payload: dict, exit_code: int, json_mode: bool) -> None:
 
 
 @click.group()
-@click.version_option()
+@click.version_option(package_name="mailbox-autopilot")
 def cli():
     """Clean up an IMAP mailbox and draft replies. Never sends mail."""
 
