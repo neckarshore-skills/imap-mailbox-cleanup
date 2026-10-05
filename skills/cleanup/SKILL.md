@@ -1,11 +1,11 @@
 ---
 name: cleanup
-description: Discover and clean up an IONOS IMAP mailbox via the `mailbox-autopilot` CLI. Use when the user wants to triage, scan, delete, archive, or unsubscribe from messages in their mail account. Always shows dry-run preview before any destructive operation. Multi-account capable. For finding, reading or answering mail use the manage skill.
+description: Discover and clean up an IMAP mailbox via the `mailbox-autopilot` CLI. Use when the user wants to triage, scan, delete, archive, or unsubscribe from messages in their mail account, or asks which mail accounts are configured. Always shows dry-run preview before any destructive operation. Multi-account capable. For finding, reading or answering mail use the manage skill.
 ---
 
 # cleanup (mailbox-autopilot)
 
-Conversational orchestrator over the `mailbox-autopilot` CLI (`mailbox-cleanup` is the older name of the same CLI). Wraps discovery → preview → apply loops with safety checks. Multi-account capable: every CLI call resolves to one account via `--account=<alias|email>` or the configured default.
+Conversational orchestrator over the `mailbox-autopilot` CLI (`mailbox-cleanup` remains an alias of the same CLI). Wraps discovery → preview → apply loops with safety checks. Multi-account capable: every CLI call resolves to one account via `--account=<alias|email>` or the configured default.
 
 ## Required CLI version
 
@@ -172,7 +172,7 @@ A name such as "The Code" is refused. Find the sender's address in the dry-run's
 1. **Never call any subcommand with `--apply` without showing a dry-run preview first and getting explicit "ja" / "yes" / "apply" from the user.**
 2. **Never invent UID lists or counts.** Always use the JSON returned by the CLI.
 3. **Never edit the audit log.** It is append-only forensics.
-4. **All destructive operations move to Trash.** v1 has no hard-delete; if the user asks "wirklich löschen", explain that v1 only soft-deletes and Trash is purged by IONOS retention.
+4. **All destructive operations move to Trash.** v1 has no hard-delete; if the user asks "wirklich löschen", explain that v1 only soft-deletes and Trash is purged by the mail provider's retention.
 5. **Never mix accounts in a single dry-run/apply pair.** If the user switches account mid-session, re-run the preview against the new account before any `--apply`.
 6. **Never change messages outside the CLI.** No script moves, deletes or flags mail. If the CLI cannot do it, stop and report the gap (see "When the CLI isn't enough").
 7. **Every `delete --apply` and `move --apply` carries `--expect-count`** with the `affected_count` the user confirmed. No other subcommand accepts it yet; do not pass it there.

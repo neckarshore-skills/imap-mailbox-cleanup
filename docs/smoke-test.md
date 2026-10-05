@@ -3,7 +3,7 @@
 **Goal:** Verify CLI works end-to-end against the real IONOS mailbox using read-only operations only.
 
 **Pre-conditions:**
-- `mailbox-cleanup` installed (`uv tool install --editable .`)
+- `mailbox-autopilot` installed (`uv tool install --editable .`); `mailbox-cleanup` remains an alias of the same CLI
 - Network access to `imap.ionos.de:993`
 
 ## Steps
@@ -11,41 +11,41 @@
 1. **Set credentials**
 
    ```bash
-   mailbox-cleanup auth set --email you@example.com --server imap.ionos.de
+   mailbox-autopilot auth set --email you@example.com --server imap.ionos.de
    ```
    At the password prompt, enter the IONOS mailbox password.
 
 2. **Test connection**
 
    ```bash
-   mailbox-cleanup auth test --email you@example.com --json | jq '.ok, .folders[]'
+   mailbox-autopilot auth test --email you@example.com --json | jq '.ok, .folders[]'
    ```
    Expected: `true` followed by folder names (INBOX, Sent, Papierkorb, ...).
 
 3. **Scan INBOX (read-only)**
 
    ```bash
-   mailbox-cleanup scan --email you@example.com --json | jq '.total_messages, .size_total_mb'
+   mailbox-autopilot scan --email you@example.com --json | jq '.total_messages, .size_total_mb'
    ```
    Expected: integer count and MB total.
 
 4. **Top senders**
 
    ```bash
-   mailbox-cleanup senders --email you@example.com --top 10 --json | jq '.senders'
+   mailbox-autopilot senders --email you@example.com --top 10 --json | jq '.senders'
    ```
    Expected: list of 10 sender objects.
 
 5. **Find large attachments (read-only)**
 
    ```bash
-   mailbox-cleanup attachments --email you@example.com --size-gt 10mb --json | jq '.candidate_count'
+   mailbox-autopilot attachments --email you@example.com --size-gt 10mb --json | jq '.candidate_count'
    ```
 
 6. **Dry-run delete (no --apply!)**
 
    ```bash
-   mailbox-cleanup delete --email you@example.com --sender notifications@github.com --json | jq '.dry_run, .affected_count'
+   mailbox-autopilot delete --email you@example.com --sender notifications@github.com --json | jq '.dry_run, .affected_count'
    ```
    Expected: `true` and a count. Mailbox is unchanged.
 

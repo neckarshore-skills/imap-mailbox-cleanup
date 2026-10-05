@@ -63,14 +63,14 @@ def resolve_account_and_credentials(
             raise AccountFlagsError(
                 "no_config",
                 f"No config found at {config_path()}. Run "
-                "'mailbox-cleanup config init' or pass --account / --email "
+                "'mailbox-autopilot config init' or pass --account / --email "
                 "to bootstrap.",
             )
 
     # --email deprecation: treat as --account if --account not given
     if email_flag and not account_flag:
         warnings.warn(
-            "--email is deprecated; use --account=<alias-or-email>. Removed in v0.3.",
+            "--email is deprecated; use --account=<alias-or-email>. Removed in v0.4.",
             DeprecationWarning,
             stacklevel=2,
         )

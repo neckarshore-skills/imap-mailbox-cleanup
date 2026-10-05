@@ -1,7 +1,7 @@
 [project]
-name = "mailbox-cleanup"
-version = "0.2.1"
-description = "Hybrid CLI + Claude Skill to clean up an IONOS IMAP mailbox"
+name = "mailbox-autopilot"
+version = "0.3.0"
+description = "Clean up an IMAP mailbox and draft replies. Never sends mail."
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -22,6 +22,7 @@ dev = [
 ]
 
 [project.scripts]
+mailbox-autopilot = "mailbox_cleanup.cli:cli"
 mailbox-cleanup = "mailbox_cleanup.cli:cli"
 
 [build-system]

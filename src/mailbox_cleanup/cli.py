@@ -73,12 +73,12 @@ def _fail(payload: dict, exit_code: int, json_mode: bool) -> None:
 @click.group()
 @click.version_option()
 def cli():
-    """Triage and clean up an IONOS IMAP mailbox."""
+    """Clean up an IMAP mailbox and draft replies. Never sends mail."""
 
 
 @cli.group()
 def auth():
-    """Manage IONOS credentials in macOS Keychain."""
+    """Manage mailbox credentials in macOS Keychain."""
 
 
 @auth.command("set")

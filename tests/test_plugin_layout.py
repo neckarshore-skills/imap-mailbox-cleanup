@@ -42,21 +42,22 @@ def test_old_skill_location_holds_no_skill():
 
 
 def test_manifest_version_matches_the_package():
-    # The v0.3 bump is an open Sensei decision (plan Task 12); the manifest must not
-    # settle it on its own.
+    # The manifest version is what installed users update on; it may never drift from
+    # the package version.
     m = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     py = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert m["version"] == py["project"]["version"]
 
 
 def test_launcher_calls_an_entry_point_that_exists():
-    # Until Task 12 only `mailbox-cleanup` is an entry point; it stays one after
-    # (Global Constraint 6). Calling any other name makes the plugin's CLI dead on arrival.
+    # Calling a name that pyproject.toml does not declare makes the plugin's CLI dead on
+    # arrival, so the exec'd name is read from the launcher and looked up, not assumed.
     scripts = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["scripts"]
     exec_lines = [ln for ln in LAUNCHER.read_text().splitlines() if ln.startswith("exec ")]
     assert len(exec_lines) == 1
-    assert " mailbox-cleanup " in exec_lines[0] + " "
-    assert "mailbox-cleanup" in scripts
+    called = exec_lines[0].split(' "$ROOT" ', 1)[1].split()[0]
+    assert called == "mailbox-autopilot"
+    assert scripts[called] == "mailbox_cleanup.cli:cli"
 
 
 def test_skill_names():

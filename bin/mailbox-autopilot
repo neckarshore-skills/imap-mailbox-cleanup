@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # bin/mailbox-autopilot — runs the CLI from this plugin checkout. Requires uv.
-# It calls the `mailbox-cleanup` entry point on purpose: that name is guaranteed to stay
-# (plan Global Constraint 6), while a `mailbox-autopilot` entry point exists only from the
-# rename (plan Task 12) on.
+# It calls the `mailbox-autopilot` entry point (a package entry point since 0.3.0), so
+# usage and error texts show the name the plugin user typed. tests/test_plugin_layout.py
+# holds the called name to an entry point pyproject.toml declares.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if ! command -v uv >/dev/null 2>&1; then
   echo "mailbox-autopilot needs uv (https://docs.astral.sh/uv/): brew install uv" >&2
   exit 127
 fi
-exec uv run --quiet --frozen --project "$ROOT" mailbox-cleanup "$@"
+exec uv run --quiet --frozen --project "$ROOT" mailbox-autopilot "$@"

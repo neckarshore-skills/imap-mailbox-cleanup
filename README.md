@@ -1,10 +1,10 @@
-# mailbox-cleanup
+# mailbox-autopilot
 
 <p align="center">
-  <img src=".github/social-preview.jpg" alt="mailbox-cleanup — Mailbox Triage. Dry-run first." width="100%"/>
+  <img src=".github/social-preview.jpg" alt="mailbox-autopilot — Mailbox Triage. Dry-run first." width="100%"/>
 </p>
 
-Hybrid CLI + Claude Code Skill for triaging and cleaning up an IONOS IMAP mailbox. Dry-run by default, audit-logged, soft-delete-only. Multi-account capable.
+CLI plus Claude Code plugin for triaging and cleaning up an IMAP mailbox and drafting replies. Dry-run by default, audit-logged, soft-delete-only, never sends mail. Multi-account capable. Tested on IONOS; the server defaults to `imap.ionos.de` and `--server` takes any IMAP host.
 
 [![CI](https://github.com/neckarshore-skills/imap-mailbox-cleanup/actions/workflows/ci.yml/badge.svg)](https://github.com/neckarshore-skills/imap-mailbox-cleanup/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
@@ -36,9 +36,9 @@ Claude Code Session
   ↓ /mailbox-autopilot:cleanup or natural request
 Claude Skill (Markdown, orchestrator)
   ↓ subprocess + JSON
-CLI: mailbox-cleanup <subcommand> [--account=<alias>] [--apply | --json]
+CLI: mailbox-autopilot <subcommand> [--account=<alias>] [--apply | --json]
   ↓ imap-tools
-IONOS IMAP
+IMAP server (default: IONOS)
 ```
 
 State files (per user):
@@ -70,7 +70,7 @@ cd imap-mailbox-cleanup
 uv tool install --editable .
 ```
 
-This puts `mailbox-cleanup` on your `PATH` (typically `~/.local/bin/mailbox-cleanup`). The CLI binary keeps the short name `mailbox-cleanup`; only the GitHub repo is `imap-mailbox-cleanup`.
+This puts `mailbox-autopilot` on your `PATH` (typically `~/.local/bin/mailbox-autopilot`). `mailbox-cleanup`, the CLI's earlier name, is installed next to it as an alias and runs the same code, so existing scripts keep working. What does not change: the `~/.mailbox-cleanup/` directory, the Keychain service `mailbox-cleanup` and the `MAILBOX_CLEANUP_*` environment variables keep their names, so an existing setup carries over untouched.
 
 ## Setup
 
@@ -79,8 +79,8 @@ This puts `mailbox-cleanup` on your `PATH` (typically `~/.local/bin/mailbox-clea
 ### First-time setup (one account)
 
 ```bash
-mailbox-cleanup auth set --alias=work --email=you@example.com
-mailbox-cleanup auth test --account=work
+mailbox-autopilot auth set --alias=work --email=you@example.com
+mailbox-autopilot auth test --account=work
 ```
 
 `auth set` writes the account record to `~/.mailbox-cleanup/config.json` and stores the password in the macOS Keychain (service `mailbox-cleanup`, account = email).
@@ -88,9 +88,9 @@ mailbox-cleanup auth test --account=work
 ### Adding a second account
 
 ```bash
-mailbox-cleanup auth set --alias=private --email=other@example.com
-mailbox-cleanup config list
-mailbox-cleanup config set-default work
+mailbox-autopilot auth set --alias=private --email=other@example.com
+mailbox-autopilot config list
+mailbox-autopilot config set-default work
 ```
 
 ### Migrating from v0.1
@@ -101,14 +101,16 @@ mailbox-cleanup config set-default work
 
 The repository ships as a Claude Code plugin with two skills, `cleanup` (triage, archive, delete, unsubscribe) and `manage` (search, read, follow threads, draft replies into your Drafts folder), plus a send-blocking hook. The plugin never sends mail: a reply lands in Drafts and you send it from your own mail client.
 
-**Status:** the marketplace listing is pending the repository's rename to `mailbox-autopilot`. Once it is listed, install with:
+Install from the Neckarshore marketplace:
 
 ```bash
 /plugin marketplace add neckarshore-skills/neckarshore-plugins
 /plugin install mailbox-autopilot@neckarshore-ai
 ```
 
-- **Prerequisite:** `uv` on your PATH. The plugin's `bin/mailbox-autopilot` launcher runs the CLI through `uv` from the plugin folder; the first call sets up its environment there. Without `uv` it stops with exit 127 and says so.
+- **Prerequisite:** `uv` on your PATH. The plugin's `bin/mailbox-autopilot` launcher runs the CLI through `uv` from the plugin folder; without `uv` it stops with exit 127 and says so.
+- **The first call is slow and needs network.** `uv` builds the environment inside the plugin folder and may download Python 3.11+. That can take several seconds with no output; later calls are fast.
+- **Tested in Claude Code only.** The plugin depends on its `bin/` launcher and a local `uv`, so it needs a surface with a local shell.
 - **Where the command works:** inside Claude Code, the plugin puts `mailbox-autopilot` on PATH. Your own terminal does not get it. For `auth set` (which needs a real terminal) use the CLI install above, or ask Claude for the launcher's absolute path.
 - **The send-blocking hook** is a PreToolUse hook on Bash. It blocks the send routes it recognises (`smtplib`/`sendmail` in scripts, `osascript` telling Mail to send, `curl` to `smtp://`/`smtps://`) and passes ordinary commands. It is a partial second lock: an obfuscated command can get past it. The first lock is that the package contains no send code.
 - **Migrating from the old skill:** if you symlinked or copied `skill/` to `~/.claude/skills/mailbox-cleanup`, remove that entry **before** installing the plugin (`rm ~/.claude/skills/mailbox-cleanup` for a symlink). The skill now lives in `skills/cleanup/`; keeping the old entry would load it twice, and a symlink into a clone breaks as soon as that clone is updated.
@@ -125,22 +127,22 @@ Once two or more accounts are configured, every subcommand picks an account via 
 
 ```bash
 # Operate on the default account
-mailbox-cleanup scan
+mailbox-autopilot scan
 
 # Operate on a specific account
-mailbox-cleanup scan --account=private
-mailbox-cleanup scan --account=other@example.com   # email also works
+mailbox-autopilot scan --account=private
+mailbox-autopilot scan --account=other@example.com   # email also works
 
 # Override via env var (useful for scripts/Marvin cron)
-MAILBOX_CLEANUP_ACCOUNT=private mailbox-cleanup scan
+MAILBOX_CLEANUP_ACCOUNT=private mailbox-autopilot scan
 
 # Manage accounts
-mailbox-cleanup config list                # tabular
-mailbox-cleanup config list --json         # machine-readable
-mailbox-cleanup config show work
-mailbox-cleanup config rename work office
-mailbox-cleanup config set-default office
-mailbox-cleanup config remove private      # also deletes Keychain password
+mailbox-autopilot config list                # tabular
+mailbox-autopilot config list --json         # machine-readable
+mailbox-autopilot config show work
+mailbox-autopilot config rename work office
+mailbox-autopilot config set-default office
+mailbox-autopilot config remove private      # also deletes Keychain password
 ```
 
 ## Usage
@@ -158,17 +160,17 @@ Or ask in plain words ("räum mein Postfach auf", "antworte auf die Mail von X")
 
 ```bash
 # Discovery
-mailbox-cleanup scan --account=work --json
-mailbox-cleanup senders --account=work --top 50
+mailbox-autopilot scan --account=work --json
+mailbox-autopilot senders --account=work --top 50
 
 # Dry-run delete (preview only)
-mailbox-cleanup delete --account=work --sender "newsletter@x.com"
+mailbox-autopilot delete --account=work --sender "newsletter@x.com"
 
 # Apply
-mailbox-cleanup delete --account=work --sender "newsletter@x.com" --apply
+mailbox-autopilot delete --account=work --sender "newsletter@x.com" --apply
 
 # Combine filters (AND)
-mailbox-cleanup delete \
+mailbox-autopilot delete \
   --account=work \
   --sender "noreply@github.com" \
   --older-than 6m \
@@ -176,38 +178,38 @@ mailbox-cleanup delete \
 
 # Newsletters older than 2 days, except two senders you keep.
 # The dry-run reports affected_count, kept_count and a by_sender breakdown.
-mailbox-cleanup delete --account=work --category newsletter --older-than 2d \
+mailbox-autopilot delete --account=work --category newsletter --older-than 2d \
   --keep "billing@example.com" --keep "@example.org"
 
 # Apply only the set you confirmed: refuses (preview_mismatch) if it changed
-mailbox-cleanup delete --account=work --category newsletter --older-than 2d \
+mailbox-autopilot delete --account=work --category newsletter --older-than 2d \
   --keep "billing@example.com" --keep "@example.org" --apply --expect-count 1388
 
 # Several senders at once, or everything sent to one address
-mailbox-cleanup delete --account=work --sender "a@example.com" --sender "b@example.com"
-mailbox-cleanup delete --account=work --recipient "alias@example.net"
+mailbox-autopilot delete --account=work --sender "a@example.com" --sender "b@example.com"
+mailbox-autopilot delete --account=work --recipient "alias@example.net"
 
 # Move (e.g. invoices to a tax folder)
-mailbox-cleanup move \
+mailbox-autopilot move \
   --account=work \
   --sender "noreply@ionos.de" \
   --to "STEUER Rechnungen Finanzamt" \
   --apply
 
 # Bulk archive
-mailbox-cleanup archive --account=work --older-than 12m --apply
+mailbox-autopilot archive --account=work --older-than 12m --apply
 
 # Unsubscribe (RFC 2369 / RFC 8058 one-click)
-mailbox-cleanup unsubscribe --account=work --sender "newsletter@x.com" --apply
+mailbox-autopilot unsubscribe --account=work --sender "newsletter@x.com" --apply
 
 # Dedupe by Message-ID (keeps oldest)
-mailbox-cleanup dedupe --account=work --apply
+mailbox-autopilot dedupe --account=work --apply
 
 # Find bounce / auto-reply
-mailbox-cleanup bounces --account=work --apply
+mailbox-autopilot bounces --account=work --apply
 
 # List large attachments (strip = v2)
-mailbox-cleanup attachments --account=work --size-gt 10mb
+mailbox-autopilot attachments --account=work --size-gt 10mb
 ```
 
 If only one account is configured, `--account` can be omitted.
@@ -337,7 +339,7 @@ Generic exit codes:
 ## Repo layout
 
 ```
-mailbox-cleanup/
+mailbox-autopilot/
 ├── README.md                              ← you are here
 ├── pyproject.toml                         ← Python 3.11+, click, imap-tools, keyring, requests, pytest, ruff
 ├── src/mailbox_cleanup/
@@ -389,16 +391,16 @@ CI runs the same on every push. Greenmail starts on port 3143 (plain IMAP) + 302
 
 This repo is a **producer** for the neckarshore.ai estate test-count. On every `push:main`, CI counts the two gated pytest suites (unit + the live-Greenmail integration suite) from pytest's own `--collect-only` reporter — never grep — and publishes a contract-valid `stats.json` to the dedicated [`stats-data`](../../tree/stats-data/stats.json) branch: a single-file data branch, **not** `main`. `main` is a protected branch (a bot cannot push to it without weakening its protection), so the machine artifact lives on its own unprotected branch instead. The neckarshore.ai aggregator fetches it via `contents/stats.json?ref=stats-data`. Contract: [`stats-json-contract.md`](https://github.com/neckarshore-ai/neckarshore-planning/blob/main/docs/reference/stats-json-contract.md).
 
-## Limitations (v0.2)
+## Limitations (v0.3)
 
-1. IONOS only — no provider abstraction (Gmail API, Office365 = v0.3+)
+1. Tested against IONOS and the GreenMail test server only. `--server` and `--port` take any IMAP host and folders are found by their standard special-use flags, but no other provider has been run. No Gmail API or Office365 support
 2. Strict dedupe — only by exact `Message-ID`; fuzzy hash = v2
 3. Attachment listing only — in-place strip = v2
 4. No hard-delete — final step is manual `Papierkorb leeren` in IONOS Webmail
 5. Rule-based classification only — no ML / LLM in CLI (Skill can layer it on)
 6. `auth set` requires a real TTY — no `--password-stdin` yet (v2)
 
-## v0.3+ backlog
+## Backlog
 
 - Provider abstraction (Gmail API / OAuth)
 - Fuzzy duplicate detection
