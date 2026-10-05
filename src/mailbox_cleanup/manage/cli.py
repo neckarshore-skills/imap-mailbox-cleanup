@@ -19,6 +19,13 @@ from ..cli_helpers import AccountFlagsError, resolve_account_and_credentials
 from ..config import Account
 from ..imap_client import imap_connect
 from .args import unsafe_arg_keys
+from .attachments import (
+    DestinationError,
+    NoSuchAttachmentError,
+    fetch_attachment,
+    resolve_destination,
+    write_exclusive,
+)
 from .draft import NoDraftsFolderError, build_reply, save_draft
 from .envelope import wrap
 from .ids import safe_message_id
@@ -176,6 +183,17 @@ def _message_json(m: Message) -> dict:
         "folder": m.folder,
         "message_id": _safe_message_id(m.message_id),
         "mail": wrap(f"{head}\n\n{m.text}"),
+        # index, size and a validated media type are safe outside the envelope; the file
+        # name is whatever the sender chose, so it is enveloped like every mail string.
+        "attachments": [
+            {
+                "index": a.index,
+                "size_bytes": a.size,
+                "content_type": a.content_type,
+                "filename": wrap(a.filename),
+            }
+            for a in m.attachments
+        ],
     }
 
 
@@ -215,6 +233,85 @@ def read_cmd(account_flag, folder, uid, json_mode):
         arg_keys=["uid"],
     )
     _out({"ok": True, "subcommand": "manage.read", "message": _message_json(m)})
+
+
+@manage.command("save-attachment")
+@click.option("--account", "account_flag", default=None)
+@click.option("--folder", default="INBOX", show_default=True)
+@click.option("--uid", required=True)
+@click.option("--index", required=True, type=click.IntRange(min=1), help="From `manage read`.")
+@click.option("--out", required=True, help="File to create. Never overwrites.")
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def save_attachment_cmd(account_flag, folder, uid, index, out, json_mode):
+    """Write one attachment to --out. Changes nothing in the mailbox."""
+    account, creds = _resolve(account_flag)
+    sub = "manage.save-attachment"
+    keys = ["index", "out", "uid"]
+    fail = dict(subcommand=sub, account=account, folder=folder, arg_keys=keys)
+    _reject_control_chars(fail, folder=folder, out=out)
+    if not _UID_RE.fullmatch(uid):
+        _fail_audited(
+            **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
+        )
+    # The destination is checked before the mailbox is touched: a refused path costs no
+    # IMAP call, and the message names the rule, never the path.
+    try:
+        target = resolve_destination(out)
+    except DestinationError as e:
+        _fail_audited(**fail, code="bad_args", message=str(e), exit_code=4)
+    try:
+        with imap_connect(creds, port=account.port) as mb:
+            found = fetch_attachment(mb, uid=uid, index=index, folder=folder)
+    except NoSuchAttachmentError:
+        _fail_audited(
+            **fail,
+            code="no_such_attachment",
+            message=f"message {uid} has no attachment {index}",
+            exit_code=1,
+        )
+    except Exception as e:  # never str(e): server text can echo mail content
+        _fail_audited(
+            **fail,
+            code="operation_error",
+            message=f"IMAP operation failed ({type(e).__name__})",
+            exit_code=2,
+        )
+    if found is None:
+        _fail_audited(
+            **fail, code="not_found", message=f"no message with UID {uid} in {folder}", exit_code=1
+        )
+    att, payload = found
+    try:
+        digest = write_exclusive(target, payload)
+    except OSError as e:  # appeared since the check, or not writable
+        _fail_audited(
+            **fail,
+            code="write_failed",
+            message=f"could not create --out ({type(e).__name__}); nothing was overwritten",
+            exit_code=4,
+        )
+    log_manage_action(
+        subcommand=sub,
+        account=account.alias,
+        folder=folder,
+        uids=[uid],
+        result="success",
+        arg_keys=keys,
+    )
+    _out(
+        {
+            "ok": True,
+            "subcommand": sub,
+            "uid": uid,
+            "folder": folder,
+            "index": att.index,
+            "path": str(target),
+            "size_bytes": len(payload),
+            "sha256": digest,
+            "content_type": att.content_type,
+            "filename": wrap(att.filename),
+        }
+    )
 
 
 @manage.command("thread")

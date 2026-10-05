@@ -15,7 +15,8 @@ MANAGE_FIX = Path(__file__).parent.parent / "fixtures" / "manage"
 
 
 def _send(raw_mails: list[bytes]) -> None:
-    s = smtplib.SMTP("127.0.0.1", 3025)
+    # Fixed local hostname, same reason as in tests/conftest.py (slow socket.getfqdn()).
+    s = smtplib.SMTP("127.0.0.1", 3025, local_hostname="localhost")
     for raw in raw_mails:
         s.sendmail("seed@example.com", ["test@localhost"], raw)
     s.quit()
