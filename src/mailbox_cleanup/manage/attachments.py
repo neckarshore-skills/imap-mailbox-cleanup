@@ -15,7 +15,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-_UID_RE = re.compile(r"[0-9]+")  # same rule as read._UID_RE: the UID reaches IMAP as raw text
+from .ids import UID_RE
+
 # A media type as it may appear outside the envelope: token "/" token, nothing else. A
 # value that does not fit becomes "" instead of carrying whatever a hostile mail put there.
 _CONTENT_TYPE_RE = re.compile(r"[a-z0-9][a-z0-9.+-]{0,60}/[a-z0-9][a-z0-9.+-]{0,80}")
@@ -84,18 +85,44 @@ def resolve_destination(out: str) -> Path:
     rel = target.relative_to(root).parts
     if any(part.startswith(".") for part in rel):
         raise DestinationError("--out must not contain a hidden (dot) file or directory")
-    if root == home and rel[0] == "Library":
+    if root == home and _is_library(home, rel[0]):
         raise DestinationError("--out must not lie under ~/Library")
     if target.exists() or target.is_symlink():
         raise DestinationError("--out already exists; nothing is overwritten")
     return target
 
 
+def _is_library(home: Path, first: str) -> bool:
+    """True when `first` names ~/Library. macOS file systems are usually case-insensitive,
+    so `~/library` IS `~/Library`: compare the spelling case-folded and, where both exist,
+    by file identity."""
+    if first.casefold() == "library":
+        return True
+    try:
+        return os.path.samefile(home / first, home / "Library")
+    except OSError:
+        return False
+
+
 def write_exclusive(target: Path, payload: bytes) -> str:
     """Create `target` (never overwrite, never follow a link), owner-only, not executable.
-    Returns the SHA-256 of what was written."""
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(target, flags, 0o600)
+    Returns the SHA-256 of what was written.
+
+    The file is created relative to an open handle on its directory, and that handle is
+    compared with the path `resolve_destination` approved. A directory swapped for a link
+    between the check and the write is therefore refused instead of followed.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    parent = target.parent
+    dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+    try:
+        approved = os.stat(parent.resolve())
+        if parent.resolve() != parent or not os.path.samestat(os.fstat(dfd), approved):
+            raise OSError("destination directory changed after it was checked")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow
+        fd = os.open(target.name, flags, 0o600, dir_fd=dfd)
+    finally:
+        os.close(dfd)
     with os.fdopen(fd, "wb") as f:
         f.write(payload)
     return hashlib.sha256(payload).hexdigest()
@@ -109,7 +136,7 @@ def fetch_attachment(
     None when no message has that UID; NoSuchAttachmentError when the message has no
     attachment at `index`.
     """
-    if not _UID_RE.fullmatch(uid):
+    if not UID_RE.fullmatch(uid):
         raise ValueError(f"uid must contain only ASCII digits, got {uid!r}")
     mb.folder.set(folder)
     msgs = list(mb.fetch(f"UID {uid}", mark_seen=False, limit=1))

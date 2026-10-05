@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import re
 
+# A UID reaches IMAP as raw criteria text (`UID <n>`), so it is digits only, checked
+# before any IMAP call. One definition for read, thread, draft and save-attachment.
+UID_RE = re.compile(r"[0-9]+")
+
 # `<...>` with no `"`, `\`, `(`, `)`, `*`, space or control character inside — nothing
 # that could break out of imap_tools' quoting (which only escapes `\` and `"`).
 SAFE_MSGID_RE = re.compile(r"<[A-Za-z0-9!#$%&'+/=?^_`{|}~.@\[\]:-]+>")

@@ -119,6 +119,8 @@ def test_destination_under_home_is_accepted(home):
         (".claude/skills/x.md", "hidden"),
         ("repo/.git/hooks/pre-commit", "hidden"),
         ("Library/LaunchAgents/a.plist", "Library"),
+        ("library/LaunchAgents/a.plist", "Library"),  # same folder on a case-insensitive disk
+        ("LIBRARY/x.plist", "Library"),
     ],
 )
 def test_destination_refuses_places_that_run_or_configure_things(home, rel, needle):
@@ -161,6 +163,19 @@ def test_write_exclusive_is_owner_only_not_executable_and_never_overwrites(tmp_p
     with pytest.raises(FileExistsError):
         write_exclusive(target, b"other")
     assert target.read_bytes() == PAYLOAD
+
+
+def test_write_exclusive_refuses_a_directory_swapped_for_a_link_after_the_check(tmp_path):
+    real = tmp_path / "approved"
+    real.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    target = real / "menu.odt"  # this is what resolve_destination approved
+    real.rmdir()
+    real.symlink_to(elsewhere, target_is_directory=True)  # swapped before the write
+    with pytest.raises(OSError):
+        write_exclusive(target, PAYLOAD)
+    assert list(elsewhere.iterdir()) == []
 
 
 # --- fetch: read-only towards the mailbox ------------------------------------------------
