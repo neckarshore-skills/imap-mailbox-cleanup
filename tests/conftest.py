@@ -57,7 +57,9 @@ def _seed_mailbox(host: str, port: int, user: str, password: str, eml_files: lis
     """Append .eml files into INBOX via SMTP."""
     import smtplib
 
-    smtp = smtplib.SMTP("127.0.0.1", 3025)
+    # A fixed local hostname: without it the client calls socket.getfqdn(), which can take
+    # 30 s on a network with slow reverse DNS, and GreenMail drops the idle connection.
+    smtp = smtplib.SMTP("127.0.0.1", 3025, local_hostname="localhost")
     for eml in eml_files:
         with open(eml, "rb") as f:
             data = f.read()

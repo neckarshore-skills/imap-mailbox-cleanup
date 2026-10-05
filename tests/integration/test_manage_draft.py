@@ -18,7 +18,7 @@ pytestmark = pytest.mark.integration
 
 
 def _seed(message_id: str, subject: str, body: str = "Hallo") -> None:
-    s = smtplib.SMTP("127.0.0.1", 3025)
+    s = smtplib.SMTP("127.0.0.1", 3025, local_hostname="localhost")  # see tests/conftest.py
     s.sendmail(
         "seed@example.com",
         ["test@localhost"],

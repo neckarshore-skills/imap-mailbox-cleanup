@@ -6,11 +6,14 @@ import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
+from .attachments import list_attachments
+from .ids import UID_RE
+
 _MSGID_RE = re.compile(r"<[^<>\s]+>")
 # `uid` reaches IMAP as raw criteria text (F1: `AND(uid=...)` fails on GreenMail, the bare
 # string `UID <n>` is the working form) — a digits-only check is stricter than the general
 # control-character guard, and catches it before the value is ever interpolated (R1).
-_UID_RE = re.compile(r"[0-9]+")
+_UID_RE = UID_RE  # the name the CLI imports; the rule lives in ids.py
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,8 @@ class Message:
     subject: str
     date: str
     text: str
+    # tuple of manage.attachments.Attachment; listed by `read`, fetched by `save-attachment`
+    attachments: tuple = ()
 
 
 class _Text(HTMLParser):
@@ -86,6 +91,7 @@ def to_message(msg, folder: str) -> Message:
         subject=msg.subject or "",
         date=msg.date.isoformat() if msg.date else "",
         text=text,
+        attachments=list_attachments(msg),
     )
 
 
