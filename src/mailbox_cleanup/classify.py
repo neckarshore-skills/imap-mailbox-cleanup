@@ -5,7 +5,10 @@ from enum import StrEnum
 
 LARGE_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
 
-NEWSLETTER_LOCAL_PARTS = {"newsletter", "noreply", "no-reply", "news", "marketing"}
+# "noreply" / "no-reply" are deliberately absent: they say the sender takes no replies,
+# not what the mail is. Login alerts, invoices and tickets come from such addresses.
+# A noreply sender still counts as a newsletter when it carries List-Unsubscribe.
+NEWSLETTER_LOCAL_PARTS = {"newsletter", "news", "marketing"}
 AUTOMATED_LOCAL_PARTS = {
     "notifications",
     "notification",
