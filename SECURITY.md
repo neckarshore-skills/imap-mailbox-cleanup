@@ -11,7 +11,7 @@ security fixes; there is no back-port of older tags.
 
 ## Data Handling
 
-`imap-mailbox-cleanup` connects to an IMAP mailbox to triage and delete messages.
+`mailbox-autopilot` connects to an IMAP mailbox to triage and delete messages.
 Two points worth distinguishing:
 
 **Credentials stay on your machine.** The tool reads IMAP host, username, and
@@ -49,7 +49,7 @@ the IMAP/SMTP server you specify and — during `unsubscribe` — to the sender'
 
 Report security issues **privately** via GitHub's private vulnerability reporting:
 the **Security** tab → **Report a vulnerability** on
-<https://github.com/neckarshore-skills/imap-mailbox-cleanup/security/advisories>.
+<https://github.com/neckarshore-skills/mailbox-autopilot/security/advisories>.
 This keeps the report confidential until a fix ships.
 
 Include:

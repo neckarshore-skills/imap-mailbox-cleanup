@@ -145,7 +145,7 @@ If the user asks for something no subcommand or filter can express:
 1. Say so plainly: which part of the request the CLI cannot do.
 2. Offer the closest CLI route, if there is one, and show its dry-run.
 3. Name the gap as a missing CLI capability, so it can be built: the repository is
-   `neckarshore-skills/imap-mailbox-cleanup`.
+   `neckarshore-skills/mailbox-autopilot`.
 
 Do **not** write Python or IMAP code that changes messages. That includes `imap_tools`
 calls that move, delete, flag or expunge, and raw `MOVE` / `STORE` / `EXPUNGE` commands.

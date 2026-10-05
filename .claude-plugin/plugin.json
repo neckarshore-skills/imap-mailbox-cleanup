@@ -3,7 +3,7 @@
   "version": "0.3.1",
   "description": "Clean up an IMAP mailbox and draft replies into Drafts. Never sends mail.",
   "author": { "name": "Neckarshore AI", "url": "https://neckarshore.ai" },
-  "repository": "https://github.com/neckarshore-skills/imap-mailbox-cleanup",
+  "repository": "https://github.com/neckarshore-skills/mailbox-autopilot",
   "license": "MIT",
   "keywords": ["email", "imap", "claude-code", "agent-skills", "drafts", "cleanup"]
 }
