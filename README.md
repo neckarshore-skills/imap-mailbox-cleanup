@@ -6,7 +6,7 @@
 
 CLI plus Claude Code plugin for triaging and cleaning up an IMAP mailbox and drafting replies. Dry-run by default, audit-logged, soft-delete-only, never sends mail. Multi-account capable. Tested on IONOS; the server defaults to `imap.ionos.de` and `--server` takes any IMAP host.
 
-[![CI](https://github.com/neckarshore-skills/imap-mailbox-cleanup/actions/workflows/ci.yml/badge.svg)](https://github.com/neckarshore-skills/imap-mailbox-cleanup/actions/workflows/ci.yml)
+[![CI](https://github.com/neckarshore-skills/mailbox-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/neckarshore-skills/mailbox-autopilot/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -65,8 +65,8 @@ State files (per user):
 Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) (`brew install uv`).
 
 ```bash
-git clone https://github.com/neckarshore-skills/imap-mailbox-cleanup.git
-cd imap-mailbox-cleanup
+git clone https://github.com/neckarshore-skills/mailbox-autopilot.git
+cd mailbox-autopilot
 uv tool install --editable .
 ```
 
