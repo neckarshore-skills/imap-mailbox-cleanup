@@ -112,13 +112,24 @@ def _mixed():
         _msg(3, "Billing@Shop.example", NL),
         _msg(4, "promo@mail.bank.example", NL),
         _msg(5, "news@a.example", NL),
-        _msg(6, "noreply@c.example"),
+        _msg(6, "newsletter@c.example"),
     ]
 
 
 def test_category_selects_only_that_category():
     sel = select_messages(FakeMailbox(_mixed()), folder="INBOX", category="newsletter")
     assert [m.uid for m in sel.messages] == ["1", "3", "4", "5", "6"]
+
+
+def test_category_newsletter_does_not_reach_a_bare_noreply_sender():
+    # A login alert or invoice from a noreply address is not a newsletter.
+    msgs = [
+        _msg(1, "news@a.example", NL),
+        _msg(2, "noreply@bank.example"),
+        _msg(3, "no-reply@shop.example", NL),
+    ]
+    sel = select_messages(FakeMailbox(msgs), folder="INBOX", category="newsletter")
+    assert [m.uid for m in sel.messages] == ["1", "3"]
 
 
 def test_keep_list_excludes_and_is_counted():
@@ -297,7 +308,7 @@ def test_cli_several_senders_and_recipient_are_logged(cli_env):
         [
             "delete",
             "--sender", "news@a.example",
-            "--sender", "noreply@c.example",
+            "--sender", "newsletter@c.example",
             "--recipient", "alias@relay.example",
             "--apply",
             "--json",
@@ -305,7 +316,7 @@ def test_cli_several_senders_and_recipient_are_logged(cli_env):
     )  # fmt: skip
     assert res.exit_code == 0, res.output
     (rec,) = _records(cli_env.log)
-    assert rec["args"]["sender"] == ["news@a.example", "noreply@c.example"]
+    assert rec["args"]["sender"] == ["news@a.example", "newsletter@c.example"]
     assert rec["args"]["recipient"] == "alias@relay.example"
     assert rec["result"] == "success"
 

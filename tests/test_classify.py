@@ -14,10 +14,30 @@ def test_newsletter_via_unsubscribe_header():
 
 def test_newsletter_via_sender_pattern():
     assert is_newsletter(from_addr="newsletter@linkedin.com", subject="x", headers={})
-    assert is_newsletter(from_addr="noreply@github.com", subject="x", headers={})
-    assert is_newsletter(from_addr="no-reply@x.com", subject="x", headers={})
     assert is_newsletter(from_addr="news@medium.com", subject="x", headers={})
     assert is_newsletter(from_addr="marketing@x.com", subject="x", headers={})
+
+
+def test_noreply_sender_alone_is_not_a_newsletter():
+    # "noreply" says the sender takes no replies, nothing about the content. Login
+    # alerts, invoices, tickets and booking confirmations all come from such
+    # addresses, and `delete --category newsletter` must not reach them by name.
+    for local in ["noreply", "no-reply", "NoReply", "NO-REPLY"]:
+        assert not is_newsletter(
+            from_addr=f"{local}@bank.example", subject="New device login", headers={}
+        )
+
+
+def test_noreply_sender_with_unsubscribe_header_is_a_newsletter():
+    headers = {"List-Unsubscribe": "<https://shop.example/unsub>"}
+    assert is_newsletter(from_addr="noreply@shop.example", subject="Sale", headers=headers)
+
+
+def test_noreply_sender_alone_gets_no_category():
+    cats = classify(
+        from_addr="no-reply@bank.example", subject="Your invoice", headers={}, size_bytes=1024
+    )
+    assert cats == set()
 
 
 def test_not_newsletter_for_personal():

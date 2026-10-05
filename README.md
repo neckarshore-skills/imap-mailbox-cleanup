@@ -281,7 +281,7 @@ The contract between CLI and Skill — `scan` always emits this shape:
 
 | Category | Rule |
 |----------|------|
-| **newsletter** | `List-Unsubscribe` header present **OR** sender local-part matches `newsletter`, `noreply`, `no-reply`, `news`, `marketing` |
+| **newsletter** | `List-Unsubscribe` header present **OR** sender local-part matches `newsletter`, `news`, `marketing`. A `noreply` / `no-reply` sender alone is **not** a newsletter (since 0.3.2): login alerts, invoices and tickets come from such addresses. Notification mail that carries `List-Unsubscribe` still matches, so check `by_sender` in the dry-run and use `--keep` |
 | **automated** | sender local-part matches `notifications`, `bot`, `service`, `alerts`, `system`, `daemon`, `automation` |
 | **bounce** | sender is `MAILER-DAEMON` / `postmaster` **OR** subject starts with `Undelivered`, `Returned`, `Mail Delivery`, `Auto-Reply`, `Out of Office`, `Abwesenheits` |
 | **duplicate** | identical `Message-ID` header (true dupe; fuzzy dedupe deferred to v2) |
