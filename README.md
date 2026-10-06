@@ -108,7 +108,7 @@ Install from the Neckarshore marketplace:
 /plugin install mailbox-autopilot@neckarshore-ai
 ```
 
-- **Attachments:** `manage read` lists a mail's attachments, and `manage save-attachment --uid <UID> --index <N> --out <path>` writes one to a path you name. It never overwrites a file, never writes hidden files or under `~/Library`, and changes nothing in the mailbox.
+- **Attachments:** `manage read` lists a mail's attachments, and `manage save-attachment --uid <UID> --index <N> --out <path>` writes one to a path you name. It never overwrites a file, never writes hidden files, under `~/Library` or to a file name that is loaded automatically (such as `CLAUDE.md` or `conftest.py`), and changes nothing in the mailbox.
 - **Prerequisite:** `uv` on your PATH. The plugin's `bin/mailbox-autopilot` launcher runs the CLI through `uv` from the plugin folder; without `uv` it stops with exit 127 and says so.
 - **The first call is slow and needs network.** `uv` builds the environment inside the plugin folder and may download Python 3.11+. That can take several seconds with no output; later calls are fast.
 - **Tested in Claude Code only.** The plugin depends on its `bin/` launcher and a local `uv`, so it needs a surface with a local shell.
