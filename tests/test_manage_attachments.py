@@ -162,6 +162,35 @@ def test_destination_refuses_a_file_name_that_is_loaded_by_name(home, rel):
         resolve_destination(str(target))
 
 
+# A file system compares names more loosely than Python compares strings: HFS+ skips
+# zero-width characters, so `CLAUDE<U+200C>.md` IS `CLAUDE.md` there. Characters nobody can
+# see are refused in any component; compatibility forms and trailing dots are folded
+# before the name is compared (review of 1fe4d38).
+@pytest.mark.parametrize(
+    "rel, needle",
+    [
+        ("Developer/repo/CLAUDE\u200c.md", "invisible"),
+        ("Developer/repo/conftest\u200d.py", "invisible"),
+        ("Developer/repo/\ufeffMakefile", "invisible"),
+        ("Developer/re\u200bpo/menu.odt", "invisible"),
+        ("Developer/repo/\uff23LAUDE.md", "loaded automatically"),  # fullwidth C
+        ("Developer/repo/CLAUDE.md.", "loaded automatically"),
+        ("Developer/repo/conftest.py ", "loaded automatically"),
+    ],
+)
+def test_destination_refuses_a_name_the_file_system_would_read_as_a_refused_one(home, rel, needle):
+    target = home / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(DestinationError, match=needle):
+        resolve_destination(str(target))
+
+
+def test_destination_keeps_ordinary_non_ascii_names(home):
+    assert resolve_destination(str(home / "Documents" / "Menü Über 2026.odt")).name == (
+        "Menü Über 2026.odt"
+    )
+
+
 def test_destination_inside_a_git_working_tree_is_accepted_under_an_ordinary_name(home):
     """Deliberate: the menu belongs in a website repository and a note in a vault that is
     under git. Refusing every working tree would refuse the tool's own purpose."""
