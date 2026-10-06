@@ -12,13 +12,15 @@ import hashlib
 import os
 import re
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from .ids import UID_RE
 
-# A media type as it may appear outside the envelope: token "/" token, nothing else. A
-# value that does not fit becomes "" instead of carrying whatever a hostile mail put there.
+# A media type: token "/" token, nothing else. A value that does not fit becomes "" instead
+# of carrying whatever a hostile mail put there. The shape check is a floor, not a proof: a
+# sentence written with dots and hyphens fits it. The CLI therefore envelopes the value.
 _CONTENT_TYPE_RE = re.compile(r"[a-z0-9][a-z0-9.+-]{0,60}/[a-z0-9][a-z0-9.+-]{0,80}")
 
 
@@ -55,6 +57,39 @@ def list_attachments(msg) -> tuple[Attachment, ...]:
     )
 
 
+# File names that an agent, Python or make loads by name from whatever directory they lie
+# in. Compared case-folded. This list is a floor: it names the known cases and cannot name
+# the unknown ones. What carries the rule is the skill: save only to the path the user named.
+_AUTOLOADED_NAMES = frozenset(
+    {
+        "agents.md",
+        "claude.local.md",
+        "claude.md",
+        "conftest.py",
+        "gemini.md",
+        "gnumakefile",
+        "makefile",
+        "sitecustomize.py",
+        "skill.md",
+        "usercustomize.py",
+        "__init__.py",
+    }
+)
+_AUTOLOADED_SUFFIXES = (".pth",)
+
+
+def _has_invisible(name: str) -> bool:
+    """True when `name` holds a control or format character (zero-width joiners, direction
+    marks, a byte-order mark). Some file systems skip them when comparing names, so a name
+    carrying one can BE a refused name without spelling it."""
+    return any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name)
+
+
+def _is_autoloaded(name: str) -> bool:
+    n = unicodedata.normalize("NFKC", name).rstrip(". ").casefold()
+    return n in _AUTOLOADED_NAMES or n.endswith(_AUTOLOADED_SUFFIXES)
+
+
 def _allowed_roots() -> list[Path]:
     roots = [Path.home(), Path(tempfile.gettempdir()), Path("/tmp")]
     return [r.resolve() for r in roots]
@@ -63,11 +98,19 @@ def _allowed_roots() -> list[Path]:
 def resolve_destination(out: str) -> Path:
     """Return the absolute path to create, or raise DestinationError.
 
-    Rules, each one closing a way a mail could turn "save this" into more than a file:
+    Rules, each one narrowing a way a mail could turn "save this" into more than a file:
     the parent directory must exist; the path must lie under the home directory or the
     temp directory; no component below that root may start with a dot (shell profiles,
-    `.ssh`, `.claude`, `.git`); nothing under `~/Library` (launch agents); and the path must
-    not exist yet, so nothing is ever overwritten.
+    `.ssh`, `.claude`, `.git`); nothing under `~/Library` (launch agents); no file name that
+    is loaded by name (`CLAUDE.md`, `conftest.py`, `Makefile`, `*.pth`); and the path must
+    not exist yet, so nothing is ever overwritten. No component may hold an invisible
+    character, because a file system may skip it when it compares names.
+
+    The name rule is a list of known cases, not a closed class: a test module, a module
+    that shadows a library, or a task-runner file under another name still passes.
+
+    A git working tree is not refused as such: a menu belongs in a website repository and a
+    note in a vault that is under git.
     """
     p = Path(out).expanduser()
     if not p.is_absolute():
@@ -83,10 +126,17 @@ def resolve_destination(out: str) -> Path:
     if root is None:
         raise DestinationError("--out must lie under the home directory or the temp directory")
     rel = target.relative_to(root).parts
+    if any(_has_invisible(part) for part in rel):
+        raise DestinationError("--out must not contain invisible (control or format) characters")
     if any(part.startswith(".") for part in rel):
         raise DestinationError("--out must not contain a hidden (dot) file or directory")
     if root == home and _is_library(home, rel[0]):
         raise DestinationError("--out must not lie under ~/Library")
+    if _is_autoloaded(target.name):
+        raise DestinationError(
+            "--out must not be a file name that is loaded automatically "
+            "(agent instructions, Python start-up files, make files)"
+        )
     if target.exists() or target.is_symlink():
         raise DestinationError("--out already exists; nothing is overwritten")
     return target

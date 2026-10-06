@@ -183,13 +183,13 @@ def _message_json(m: Message) -> dict:
         "folder": m.folder,
         "message_id": _safe_message_id(m.message_id),
         "mail": wrap(f"{head}\n\n{m.text}"),
-        # index, size and a validated media type are safe outside the envelope; the file
-        # name is whatever the sender chose, so it is enveloped like every mail string.
+        # index and size are ours and sit outside the envelope. The media type and the file
+        # name are whatever the sender chose, so both are enveloped like every mail string.
         "attachments": [
             {
                 "index": a.index,
                 "size_bytes": a.size,
-                "content_type": a.content_type,
+                "content_type": wrap(a.content_type),
                 "filename": wrap(a.filename),
             }
             for a in m.attachments
@@ -308,7 +308,7 @@ def save_attachment_cmd(account_flag, folder, uid, index, out, json_mode):
             "path": str(target),
             "size_bytes": len(payload),
             "sha256": digest,
-            "content_type": att.content_type,
+            "content_type": wrap(att.content_type),
             "filename": wrap(att.filename),
         }
     )

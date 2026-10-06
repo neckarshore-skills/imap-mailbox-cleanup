@@ -51,7 +51,8 @@ def test_read_lists_and_save_writes_identical_bytes_mailbox_untouched(
     r = CliRunner().invoke(cli, ["manage", "read", "--uid", hit.uid])
     assert r.exit_code == 0, r.output
     (a,) = json.loads(r.output)["message"]["attachments"]
-    assert (a["index"], a["size_bytes"], a["content_type"]) == (1, len(PAYLOAD), ODT)
+    assert (a["index"], a["size_bytes"]) == (1, len(PAYLOAD))
+    assert a["content_type"] == f"<mail-content>\n{ODT}\n</mail-content>"
     assert "wochenkarte.odt" in a["filename"]
 
     out = tmp_path / "karte.odt"
