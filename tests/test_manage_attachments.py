@@ -200,7 +200,87 @@ def test_destination_inside_a_git_working_tree_is_accepted_under_an_ordinary_nam
     assert resolve_destination(str(repo / "content" / "menu.odt")) == (
         repo.resolve() / "content" / "menu.odt"
     )
-    assert resolve_destination(str(repo / "claude-notes.md")).name == "claude-notes.md"
+    assert resolve_destination(str(repo / "claude-notes.txt")).name == "claude-notes.txt"
+
+
+# The name list above is a floor: it names known cases. The review of 1fe4d38 walked around
+# it with five ordinary names (its finding with the highest confidence). The extension rule
+# turns the question round: only formats that nothing loads or runs by themselves may be
+# written, and every other name is refused, including a name with no extension at all.
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "Developer/repo/tests/test_x.py",  # the five names of the review
+        "Developer/repo/json.py",
+        "Developer/repo/hooks/hooks.json",
+        "Developer/repo/Justfile",
+        "Developer/repo/package.json",
+        "Developer/repo/notes.md",
+        "Developer/repo/MENU.PY",
+        "Developer/repo/menu.odt.py",
+        "Developer/repo/menu.p\uff59",  # fullwidth y: folds to .py
+        "Developer/repo/menu.py.",
+        "Documents/archive.zip",
+        "Documents/page.html",
+        "Documents/logo.svg",
+        "Documents/macro.docm",
+        "Documents/macro.xlsm",
+        "Documents/run.sh",
+        "Documents/tool.command",
+        "Documents/noextension",
+        "Documents/odt",
+    ],
+)
+def test_destination_refuses_a_file_extension_that_is_not_on_the_inert_list(home, rel):
+    target = home / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(DestinationError, match="file extension"):
+        resolve_destination(str(target))
+
+
+@pytest.mark.parametrize("ext", sorted(att_mod.INERT_EXTENSIONS))
+def test_destination_accepts_every_extension_on_the_inert_list(home, ext):
+    assert resolve_destination(str(home / "Documents" / f"file{ext}")).suffix == ext
+    assert resolve_destination(str(home / "Documents" / f"FILE{ext.upper()}")).name == (
+        f"FILE{ext.upper()}"
+    )
+
+
+def test_the_inert_list_holds_no_format_that_runs_or_configures():
+    """A guard on the list itself: whoever adds an extension meets this test first."""
+    never = {
+        ".py",
+        ".pth",
+        ".sh",
+        ".command",
+        ".json",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".md",
+        ".html",
+        ".htm",
+        ".svg",
+        ".js",
+        ".zip",
+        ".docm",
+        ".xlsm",
+        ".pptm",
+        ".plist",
+        "",
+    }
+    assert not (att_mod.INERT_EXTENSIONS & never)
+
+
+# `.txt` is on the inert list, and two `.txt` names are read by tools by name.
+@pytest.mark.parametrize(
+    "rel", ["Developer/repo/requirements.txt", "Developer/repo/CMakeLists.txt"]
+)
+def test_destination_refuses_a_txt_name_that_a_tool_reads_by_name(home, rel):
+    target = home / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(DestinationError, match="loaded automatically"):
+        resolve_destination(str(target))
 
 
 def test_destination_refuses_a_path_outside_the_allowed_roots(home, tmp_path):
@@ -338,7 +418,16 @@ def test_cli_save_attachment_envelopes_the_media_type_too(audit, monkeypatch, tm
     monkeypatch.setattr(mcli, "imap_connect", _connect_to(box))
     r = CliRunner().invoke(
         cli,
-        ["manage", "save-attachment", "--uid", "7", "--index", "1", "--out", str(tmp_path / "a")],
+        [
+            "manage",
+            "save-attachment",
+            "--uid",
+            "7",
+            "--index",
+            "1",
+            "--out",
+            str(tmp_path / "a.odt"),
+        ],
     )
     assert r.exit_code == 0, r.output
     d = json.loads(r.output)
@@ -367,12 +456,12 @@ def test_cli_save_attachment_writes_the_bytes_and_audits_keys_only(audit, monkey
 def test_cli_save_attachment_never_uses_the_mail_filename_as_a_path(audit, monkeypatch, tmp_path):
     box = _Box([_msg(_att("../../evil.sh"))])
     monkeypatch.setattr(mcli, "imap_connect", _connect_to(box))
-    out = tmp_path / "chosen-by-user.bin"
+    out = tmp_path / "chosen-by-user.pdf"
     r = CliRunner().invoke(
         cli, ["manage", "save-attachment", "--uid", "7", "--index", "1", "--out", str(out)]
     )
     assert r.exit_code == 0, r.output
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["audit.log", "chosen-by-user.bin"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["audit.log", "chosen-by-user.pdf"]
 
 
 def test_cli_save_attachment_refuses_an_existing_file_before_any_imap_call(

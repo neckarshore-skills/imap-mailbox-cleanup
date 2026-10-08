@@ -431,7 +431,7 @@ wheels = [
 
 [[package]]
 name = "mailbox-autopilot"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
