@@ -78,7 +78,7 @@ def test_a_mail_without_attachments_lists_none_and_save_says_so(
         uid = search(mb, sender="mira@example.org")[0].uid
     r = CliRunner().invoke(cli, ["manage", "read", "--uid", uid])
     assert json.loads(r.output)["message"]["attachments"] == []
-    out = tmp_path / "none.bin"
+    out = tmp_path / "none.odt"
     r = CliRunner().invoke(
         cli, ["manage", "save-attachment", "--uid", uid, "--index", "1", "--out", str(out)]
     )

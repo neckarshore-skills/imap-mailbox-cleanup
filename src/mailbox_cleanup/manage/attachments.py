@@ -59,7 +59,8 @@ def list_attachments(msg) -> tuple[Attachment, ...]:
 
 # File names that an agent, Python or make loads by name from whatever directory they lie
 # in. Compared case-folded. This list is a floor: it names the known cases and cannot name
-# the unknown ones. What carries the rule is the skill: save only to the path the user named.
+# the unknown ones. INERT_EXTENSIONS below refuses the rest of the class; this list stays
+# as a second layer and gives the known names a message of their own.
 _AUTOLOADED_NAMES = frozenset(
     {
         "agents.md",
@@ -77,6 +78,34 @@ _AUTOLOADED_NAMES = frozenset(
 )
 _AUTOLOADED_SUFFIXES = (".pth",)
 
+# The only file extensions `--out` may end in: formats that no agent, interpreter, build
+# tool or shell loads or runs by themselves. Everything else is refused, including a name
+# without an extension. Fail-closed on purpose: a missing extension costs the owner one
+# refused save and a one-line change here; a wrongly accepted one is noticed only after
+# something has loaded the file. No archive, no markup, no script, no configuration format
+# and no macro-carrying office format belongs here (tests pin that). Plain text is absent
+# on purpose: pytest runs every `test*.txt` as a doctest file by default, and packaging
+# metadata (`entry_points.txt`) is read by name.
+INERT_EXTENSIONS = frozenset(
+    {
+        ".csv",
+        ".docx",
+        ".gif",
+        ".heic",
+        ".ics",
+        ".jpeg",
+        ".jpg",
+        ".odp",
+        ".ods",
+        ".odt",
+        ".pdf",
+        ".png",
+        ".pptx",
+        ".webp",
+        ".xlsx",
+    }
+)
+
 
 def _has_invisible(name: str) -> bool:
     """True when `name` holds a control or format character (zero-width joiners, direction
@@ -88,6 +117,14 @@ def _has_invisible(name: str) -> bool:
 def _is_autoloaded(name: str) -> bool:
     n = unicodedata.normalize("NFKC", name).rstrip(". ").casefold()
     return n in _AUTOLOADED_NAMES or n.endswith(_AUTOLOADED_SUFFIXES)
+
+
+def _has_inert_extension(name: str) -> bool:
+    """True when the last extension of `name` is on INERT_EXTENSIONS. The name is folded the
+    same way as for the name list, so `MENU.PY`, a fullwidth spelling and a trailing dot are
+    judged by what a file system would make of them."""
+    n = unicodedata.normalize("NFKC", name).rstrip(". ").casefold()
+    return Path(n).suffix in INERT_EXTENSIONS
 
 
 def _allowed_roots() -> list[Path]:
@@ -106,8 +143,12 @@ def resolve_destination(out: str) -> Path:
     not exist yet, so nothing is ever overwritten. No component may hold an invisible
     character, because a file system may skip it when it compares names.
 
-    The name rule is a list of known cases, not a closed class: a test module, a module
-    that shadows a library, or a task-runner file under another name still passes.
+    The name rule is a list of known cases and cannot name the unknown ones. The extension
+    rule carries the class instead: the name must end in an extension from INERT_EXTENSIONS,
+    so a test module, a module that shadows a library, a task-runner file or a package
+    manifest is refused whatever it is called. What stays open: the extension is judged, not
+    the content, and a tool that loads one of the allowed formats by name (a `.csv` fixture,
+    say) is not known here. `.txt` was such a case and is not on the list.
 
     A git working tree is not refused as such: a menu belongs in a website repository and a
     note in a vault that is under git.
@@ -139,6 +180,11 @@ def resolve_destination(out: str) -> Path:
         )
     if target.exists() or target.is_symlink():
         raise DestinationError("--out already exists; nothing is overwritten")
+    if not _has_inert_extension(target.name):
+        raise DestinationError(
+            "--out must end in an allowed file extension: "
+            + ", ".join(sorted(e.lstrip(".") for e in INERT_EXTENSIONS))
+        )
     return target
 
 
