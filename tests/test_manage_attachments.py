@@ -200,7 +200,7 @@ def test_destination_inside_a_git_working_tree_is_accepted_under_an_ordinary_nam
     assert resolve_destination(str(repo / "content" / "menu.odt")) == (
         repo.resolve() / "content" / "menu.odt"
     )
-    assert resolve_destination(str(repo / "claude-notes.txt")).name == "claude-notes.txt"
+    assert resolve_destination(str(repo / "claude-notes.pdf")).name == "claude-notes.pdf"
 
 
 # The name list above is a floor: it names known cases. The review of 1fe4d38 walked around
@@ -249,6 +249,7 @@ def test_destination_accepts_every_extension_on_the_inert_list(home, ext):
 def test_the_inert_list_holds_no_format_that_runs_or_configures():
     """A guard on the list itself: whoever adds an extension meets this test first."""
     never = {
+        ".txt",
         ".py",
         ".pth",
         ".sh",
@@ -272,14 +273,26 @@ def test_the_inert_list_holds_no_format_that_runs_or_configures():
     assert not (att_mod.INERT_EXTENSIONS & never)
 
 
-# `.txt` is on the inert list, and two `.txt` names are read by tools by name.
+# `.txt` looks inert and is not: pytest collects every `test*.txt` as a doctest file by
+# default and runs its `>>>` lines (measured: a plain `pytest` run executed one), and
+# `entry_points.txt` in a `*.dist-info` folder is read by name by every plugin host. Plain
+# text is therefore not on the list at all (review of f016e31, both findings).
 @pytest.mark.parametrize(
-    "rel", ["Developer/repo/requirements.txt", "Developer/repo/CMakeLists.txt"]
+    "rel",
+    [
+        "Developer/repo/tests/test_notes.txt",
+        "Developer/repo/tests/TEST_X.TXT",
+        "Developer/repo/tests/test_x.py.txt",
+        "Developer/repo/venv/lib/site-packages/foo-1.0.dist-info/entry_points.txt",
+        "Developer/repo/requirements.txt",
+        "Developer/repo/CMakeLists.txt",
+        "Documents/notes.txt",
+    ],
 )
-def test_destination_refuses_a_txt_name_that_a_tool_reads_by_name(home, rel):
+def test_destination_refuses_plain_text_because_tools_load_it_by_name(home, rel):
     target = home / rel
     target.parent.mkdir(parents=True, exist_ok=True)
-    with pytest.raises(DestinationError, match="loaded automatically"):
+    with pytest.raises(DestinationError, match="file extension"):
         resolve_destination(str(target))
 
 

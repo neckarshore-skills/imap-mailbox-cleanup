@@ -60,7 +60,7 @@ def list_attachments(msg) -> tuple[Attachment, ...]:
 # File names that an agent, Python or make loads by name from whatever directory they lie
 # in. Compared case-folded. This list is a floor: it names the known cases and cannot name
 # the unknown ones. INERT_EXTENSIONS below refuses the rest of the class; this list stays
-# for the names that carry an allowed extension or are worth a message of their own.
+# as a second layer and gives the known names a message of their own.
 _AUTOLOADED_NAMES = frozenset(
     {
         "agents.md",
@@ -74,9 +74,6 @@ _AUTOLOADED_NAMES = frozenset(
         "skill.md",
         "usercustomize.py",
         "__init__.py",
-        # `.txt` is an inert extension (below); these two `.txt` names are read by name.
-        "cmakelists.txt",
-        "requirements.txt",
     }
 )
 _AUTOLOADED_SUFFIXES = (".pth",)
@@ -86,7 +83,9 @@ _AUTOLOADED_SUFFIXES = (".pth",)
 # without an extension. Fail-closed on purpose: a missing extension costs the owner one
 # refused save and a one-line change here; a wrongly accepted one is noticed only after
 # something has loaded the file. No archive, no markup, no script, no configuration format
-# and no macro-carrying office format belongs here (tests pin that).
+# and no macro-carrying office format belongs here (tests pin that). Plain text is absent
+# on purpose: pytest runs every `test*.txt` as a doctest file by default, and packaging
+# metadata (`entry_points.txt`) is read by name.
 INERT_EXTENSIONS = frozenset(
     {
         ".csv",
@@ -102,7 +101,6 @@ INERT_EXTENSIONS = frozenset(
         ".pdf",
         ".png",
         ".pptx",
-        ".txt",
         ".webp",
         ".xlsx",
     }
@@ -149,7 +147,8 @@ def resolve_destination(out: str) -> Path:
     rule carries the class instead: the name must end in an extension from INERT_EXTENSIONS,
     so a test module, a module that shadows a library, a task-runner file or a package
     manifest is refused whatever it is called. What stays open: the extension is judged, not
-    the content, and a tool that some day loads a `.txt` or `.csv` by name is not known here.
+    the content, and a tool that loads one of the allowed formats by name (a `.csv` fixture,
+    say) is not known here. `.txt` was such a case and is not on the list.
 
     A git working tree is not refused as such: a menu belongs in a website repository and a
     note in a vault that is under git.
