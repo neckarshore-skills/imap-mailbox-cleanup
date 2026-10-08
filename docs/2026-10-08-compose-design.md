@@ -115,4 +115,17 @@ What stays true: the tool cannot send. The worst case is a bad draft that the ow
 3. Playbooks for outbound mail types.
 4. A persistent address book. The lookup in §3 reads the mailbox each time and stores nothing.
 
-**Version:** the build ships as 0.4.0. This document changes no code and no version.
+## 8. Amendments from the build (2026-10-08)
+
+The build and its security review changed four things against the sections above. Each is listed with its cause.
+
+| # | Section | Amendment | Cause |
+|---|---------|-----------|-------|
+| 1 | §3 row 4 | `--body-file` of `manage compose` must lie in the temp directory, hold at most 1 MB and not be reached through a symlink. `manage draft` is unchanged | Founder decision 2026-10-08, 18:02 CEST, after the review: a free recipient plus a free file read lets a deceived agent stage any readable local file as a draft to an outside address. This lengthens that path and does not close it; a file can be copied into the temp directory first |
+| 2 | §3 rows 1 and 2 | The address check is an allowlist (atoms and letter-digit-hyphen labels), an RFC 2047 encoded-word is refused, addresses are written as address objects, and the header is read back and compared with the input. The response reports the addresses read back from the message | Review finding, measured on Python 3.11: under the earlier denylist one accepted value was stored as two recipients |
+| 3 | §3 "Looking up a recipient" | Search candidates carry the To header, inside the envelope | A Sent-folder hit otherwise shows only the owner's own From line, and the address to confirm would need `manage read`, which returns a body |
+| 4 | §1 non-goals 2 to 4 | `--bcc`, `--attach`, `--attachment`, `--forward` and `--uid` exist as hidden options that refuse with `out_of_scope` | Ticket criterion 5 asks for a refusal that points to the scope; an unknown option would be answered with "No such option" |
+
+**Not covered by any test:** a lookup by name (`--recipient Alex`). The test mail server matches address headers only against the full address, so only the full-address path is tested. The acceptance run on real mail covers it.
+
+**Version:** the build ships as 0.4.0.

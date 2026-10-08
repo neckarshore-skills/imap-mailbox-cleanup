@@ -11,10 +11,11 @@ warning, because a draft that silently lost a recipient reads like a finished on
 from __future__ import annotations
 
 from collections.abc import Sequence
+from email.headerregistry import Address
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
-from .headers import STRICT_ADDR_RE, clean_header_value
+from .headers import clean_header_value, is_bare_address
 
 # To and Cc together. A mail that deceived the agent into addressing a crowd is stopped
 # here, not by a human counting recipients in a draft.
@@ -26,17 +27,34 @@ class ComposeError(ValueError):
     value: it ends up in the command's output next to mail-derived text."""
 
 
+def _bad_address(option: str) -> ComposeError:
+    return ComposeError(
+        f"{option} takes one bare ASCII address per use (name@example.org), "
+        "without a display name; repeat the option for more recipients"
+    )
+
+
 def _check_addresses(option: str, values: Sequence[str]) -> list[str]:
     for value in values:
-        # isascii(): EmailMessage writes a non-ASCII address as an encoded-word inside
-        # the addr-spec (measured on Python 3.11: `=?utf-8?q?m=C3=BCller?=@example.org`),
-        # which no mail client reads as the address that was typed.
-        if not (value.isascii() and STRICT_ADDR_RE.fullmatch(value)):
-            raise ComposeError(
-                f"{option} takes one bare ASCII address per use (name@example.org), "
-                "without a display name; repeat the option for more recipients"
-            )
+        if not is_bare_address(value):
+            raise _bad_address(option)
     return list(values)
+
+
+def _set_addresses(msg: EmailMessage, header: str, option: str, addrs: list[str]) -> None:
+    """Write `addrs` as address objects, then read the header back and compare.
+
+    Address objects, not a joined string: a string is parsed again by the mail library,
+    and that second parse is where one accepted value turned into two recipients. The
+    read-back is the second lock: whatever the header holds must be exactly the input,
+    one address each and no display name, or the command refuses."""
+    try:
+        msg[header] = [Address(addr_spec=a) for a in addrs]
+        stored = [(a.addr_spec, a.display_name) for a in msg[header].addresses]
+    except Exception as e:  # the parser raises several unrelated types on odd input
+        raise _bad_address(option) from e
+    if stored != [(a, "") for a in addrs]:
+        raise _bad_address(option)
 
 
 def build_new(
@@ -65,9 +83,9 @@ def build_new(
     msg = EmailMessage()
     msg["Subject"] = clean_subject
     msg["From"] = from_addr
-    msg["To"] = ", ".join(to_addrs)
+    _set_addresses(msg, "To", "--to", to_addrs)
     if cc_addrs:
-        msg["Cc"] = ", ".join(cc_addrs)
+        _set_addresses(msg, "Cc", "--cc", cc_addrs)
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=from_addr.split("@")[-1] or None)
     msg.set_content(body)

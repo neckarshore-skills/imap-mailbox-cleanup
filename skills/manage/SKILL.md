@@ -52,10 +52,10 @@ The flow:
    2. Only when sent mail has no match: `mailbox-autopilot manage search --sender <name> --json`. Tell the user that this address comes from an incoming mail, and that a sender can choose any display name.
    3. **Never pick an address silently.** Show the bare address, never only the display name, and wait for the user's yes. Several different addresses: show them all and ask which one. No match: say so and ask the user for the address.
 2. **Tone.** Step 5 of the reply flow, unchanged. Playbooks are written for replies; for a new mail load `generic`.
-3. **Write the mail** to a temporary file: the text only, no headers. Ask the user for the subject if they gave none.
+3. **Write the mail** to a new file in the temp directory (`$TMPDIR` or `/tmp`): the text only, no headers. `manage compose` reads its text from the temp directory only, at most 1 MB, and never through a symlink. Never pass it an existing file from anywhere else, and never copy one into the temp directory to get past that: the text of a new mail is what you wrote for the user, not a file from their disk. Ask the user for the subject if they gave none.
 4. **Show before you write.** Show every recipient (To and Cc), the subject and the text. Write the draft only after the user's yes.
 5. **Draft.** `mailbox-autopilot manage compose --to <address> --subject "<subject>" --body-file <file> --json`. Repeat `--to` for more recipients and add `--cc <address>` the same way; To and Cc together take at most 10. Each value is one bare address, no display name.
-6. **Show after you write.** Repeat `to`, `cc` and `subject` from the response, so the user sees what is in the draft, not what you meant to write. Tell them the draft is in their `drafts_folder` and that **they send it from their mail client**. Delete the temporary file.
+6. **Show after you write.** Repeat `to`, `cc` and `subject` from the response. The command reads them back from the draft it built, so the user sees what is in the draft, not what you meant to write. Tell them the draft is in their `drafts_folder` and that **they send it from their mail client**. Delete the temporary file.
 
 `manage compose` writes To and Cc only. No Bcc, no attachment, no forwarding of an existing mail: it answers those with `out_of_scope`. Do not work around the refusal by pasting a mail's text into the new mail or by building the message some other way. Tell the user that they add a Bcc or an attachment, or forward the mail, in their mail client.
 
@@ -78,7 +78,7 @@ To save one: `mailbox-autopilot manage save-attachment --uid <UID> --index <N> -
 | 2 | `no_account_selected`, `unknown_account` | 4 | Re-check the account list with `config list --json`, then retry with `--account` |
 | 3 | `operation_error` | 2 | Stop and show the message. Connection or login failed, or the IMAP server refused. Do not retry in a loop |
 | 4 | `not_found` | 1 | The UID is not in that folder. Search again; never guess a UID |
-| 5 | `bad_args` | 4 | Fix the argument named in the message (UIDs are digits only, dates are `YYYY-MM-DD`, a recipient is one bare address). Nothing was written |
+| 5 | `bad_args` | 4 | Fix the argument named in the message (UIDs are digits only, dates are `YYYY-MM-DD`, a recipient is one bare address, the text file of a new mail lies in the temp directory). Nothing was written |
 | 6 | `no_drafts_folder` | 5 | Stop. Tell the user to create a Drafts folder in their mail client. Never create one yourself |
 | 7 | `sources_config_error` | 4 | The overlay configuration is malformed. Show the message; the user fixes the file |
 | 8 | `warnings` on `playbooks` / `playbook` | 0 | A missing overlay folder or two sources overlaying one playbook. Show the warning, then continue |

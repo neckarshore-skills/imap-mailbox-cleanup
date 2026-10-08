@@ -108,7 +108,7 @@ Install from the Neckarshore marketplace:
 /plugin install mailbox-autopilot@neckarshore-ai
 ```
 
-- **A new mail:** `manage compose --to <address> --subject "<subject>" --body-file <file>` writes a mail that answers nothing into Drafts. To and Cc only (repeat the option, at most 10 addresses together, each one bare address). No Bcc, no attachment and no forwarding: those are refused with `out_of_scope`. `manage search --recipient <name>` matches the To header, so the skill can look up whom you have written to before; it shows you the address and waits for your yes.
+- **A new mail:** `manage compose --to <address> --subject "<subject>" --body-file <file>` writes a mail that answers nothing into Drafts. To and Cc only (repeat the option, at most 10 addresses together, each one bare address). The text file must lie in the temp directory (`$TMPDIR` or `/tmp`), hold at most 1 MB and not be a symlink: with a free recipient, a free file read would let a deceived agent stage any local file as a draft. No Bcc, no attachment and no forwarding: those are refused with `out_of_scope`. `manage search --recipient <name>` matches the To header, so the skill can look up whom you have written to before; it shows you the address and waits for your yes.
 - **Attachments:** `manage read` lists a mail's attachments, and `manage save-attachment --uid <UID> --index <N> --out <path>` writes one to a path you name. It never overwrites a file, never writes hidden files, under `~/Library` or to a file name that is loaded automatically (such as `CLAUDE.md` or `conftest.py`), writes only inert formats (documents, spreadsheets, calendar files and images; no archive, script, plain-text, Markdown, JSON or macro file, and no name without an extension), and changes nothing in the mailbox.
 - **Prerequisite:** `uv` on your PATH. The plugin's `bin/mailbox-autopilot` launcher runs the CLI through `uv` from the plugin folder; without `uv` it stops with exit 127 and says so.
 - **The first call is slow and needs network.** `uv` builds the environment inside the plugin folder and may download Python 3.11+. That can take several seconds with no output; later calls are fast.
@@ -388,6 +388,8 @@ uv run ruff format --check .
 ```
 
 CI runs the same on every push. Greenmail starts on port 3143 (plain IMAP) + 3025 (SMTP).
+
+> **Note:** a bare `uv run pytest` starts the Greenmail container when Docker is running. To stay without Docker, run `uv run pytest -m "not integration"`: the unit tests pass, and nine older CLI tests that are not marked as integration report an error because they need the container. CI runs everything.
 
 ## Estate test-scope stats
 

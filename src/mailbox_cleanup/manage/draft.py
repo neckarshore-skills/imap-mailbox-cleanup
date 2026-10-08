@@ -15,7 +15,7 @@ from email.utils import formatdate, make_msgid, parseaddr
 from imap_tools import MailMessageFlags
 
 from ..folders import resolve_folder
-from .headers import STRICT_ADDR_RE, clean_header_value
+from .headers import clean_header_value, is_bare_address
 from .ids import safe_message_id
 from .read import Message
 
@@ -56,12 +56,12 @@ def build_reply(original: Message, *, from_addr: str, body: str) -> tuple[EmailM
     # 3.12/3.13/3.14 (pyproject allows any of these: requires-python >=3.11, no upper
     # bound), so exception-catching alone is fail-open on newer interpreters. Instead:
     # parse with parseaddr and accept the result only if it is a single, strict addr-spec
-    # (headers.STRICT_ADDR_RE). The bare address (no display name) is the safe value we set — a
+    # (headers.is_bare_address). The bare address (no display name) is the safe value we set — a
     # display name is untrusted, mail-derived text and re-parsing it buys nothing here.
     # The try/except below is a second-layer guard only, never the mechanism: a value
     # that already passed the strict check is not expected to raise.
     _, parsed_addr = parseaddr(original.reply_to or original.sender)
-    if parsed_addr and STRICT_ADDR_RE.fullmatch(parsed_addr):
+    if parsed_addr and is_bare_address(parsed_addr):
         try:
             msg["To"] = parsed_addr
         except Exception:

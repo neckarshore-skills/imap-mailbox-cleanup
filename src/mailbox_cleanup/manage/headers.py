@@ -16,11 +16,24 @@ import re
 # break) and whitespace runs collapse to a single space before a header is set.
 _CONTROL_OR_WS_RUN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]+|\s+")
 
-# A strict addr-spec — exactly one '@', a non-empty local part and domain, no whitespace,
-# angle bracket, comma, quote or control character. `@` itself is excluded from both
-# sides too, so "exactly one '@'" is structural, not just a side-effect of `fullmatch` —
-# a second '@' anywhere fails the whole match.
-STRICT_ADDR_RE = re.compile(r'^[^\s<>,"@\x00-\x1f\x7f-\x9f]+@[^\s<>,"@\x00-\x1f\x7f-\x9f]+$')
+# One bare address, by allowlist. Local part: RFC 5322 atoms joined by single dots. Domain:
+# letter-digit-hyphen labels joined by single dots. Nothing else: no quoted string, no
+# comment `( )`, no group `: ;`, no domain literal `[ ]`, no backslash.
+#
+# It is an allowlist, not a list of forbidden characters, because the value is handed to
+# the mail library's address parser, which reinterprets more than a denylist can name.
+# Measured on Python 3.11 against the earlier denylist: `=?utf-8?q?x=40y.org=2C_b?=@z.org`
+# has one `@`, no space and no comma, and was stored as TWO recipients.
+_ATOM = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+STRICT_ADDR_RE = re.compile(rf"{_ATOM}(?:\.{_ATOM})*@{_LABEL}(?:\.{_LABEL})*")
+
+
+def is_bare_address(value: str) -> bool:
+    """True when `value` is exactly one plain ASCII address that the mail library will
+    write as typed. `=?` is refused although `=` and `?` are legal atom characters: it
+    opens an RFC 2047 encoded-word, which the parser decodes inside the local part."""
+    return value.isascii() and "=?" not in value and bool(STRICT_ADDR_RE.fullmatch(value))
 
 
 def clean_header_value(value: str) -> str:

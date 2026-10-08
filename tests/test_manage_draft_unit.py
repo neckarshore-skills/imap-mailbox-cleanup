@@ -184,3 +184,32 @@ def test_no_drafts_folder_stops_and_appends_nothing(monkeypatch):
     with pytest.raises(NoDraftsFolderError):
         save_draft(_MB(), msg)
     assert appended == []
+
+
+@pytest.mark.parametrize(
+    "sender",
+    [
+        "=?utf-8?q?evil=40x.org=2C_b?=@example.org",
+        "=?utf-8?q?a=0D=0ABcc:_evil=40x.org?=@example.org",
+        "group:b@example.org;",
+        "a(b@example.org",
+        '"a, b" <evil@x.org>, c@example.org',
+    ],
+)
+def test_reply_never_stores_more_or_other_than_one_bare_address(sender):
+    """The reply path shares the address rule with `manage compose`. Whatever a hostile
+    sender header holds, the draft has either no recipient (with a warning) or exactly one
+    bare address, written to the wire as it was accepted. It never has two, and no Bcc."""
+    from mailbox_cleanup.manage.headers import is_bare_address
+
+    msg, warnings = build_reply(_orig(sender=sender), from_addr="me@example.com", body="x")
+    assert msg["Bcc"] is None
+    raw = msg.as_bytes()
+    assert b"\nBcc:" not in raw
+    if msg["To"] is None:
+        assert "original has no usable sender address; draft has no recipient" in warnings
+        return
+    (addr,) = msg["To"].addresses
+    assert is_bare_address(addr.addr_spec) and addr.display_name == ""
+    line = next(ln for ln in raw.split(b"\n") if ln.lower().startswith(b"to:"))
+    assert line.strip() == b"To: " + addr.addr_spec.encode()

@@ -165,6 +165,11 @@ def test_manage_skill_bounds_a_new_mail():
     assert "Show the bare address, never only the display name" in text
     assert "**Never pick an address silently.**" in text
     assert "**Show before you write.**" in text
+    assert (
+        "`manage compose` reads its text from the temp directory only, at most 1 MB, and "
+        "never through a symlink." in text
+    )
+    assert "never copy one into the temp directory to get past that" in text
     assert "**Show after you write.**" in text
     assert (
         "A new mail has no mail it answers, so there is nothing you may quote without asking."

@@ -118,7 +118,94 @@ def test_reply_and_new_mail_share_one_address_check():
     import mailbox_cleanup.manage.draft as draft_mod
     import mailbox_cleanup.manage.headers as headers_mod
 
-    assert draft_mod.STRICT_ADDR_RE is headers_mod.STRICT_ADDR_RE
-    assert compose_mod.STRICT_ADDR_RE is headers_mod.STRICT_ADDR_RE
+    assert draft_mod.is_bare_address is headers_mod.is_bare_address
+    assert compose_mod.is_bare_address is headers_mod.is_bare_address
     assert draft_mod.clean_header_value is headers_mod.clean_header_value
     assert compose_mod.clean_header_value is headers_mod.clean_header_value
+
+
+# --- validator and writer must agree on what one address is ------------------------------
+# Security review of 25519cf: a denylist check accepted RFC 2047 encoded-words, comments
+# and group syntax, which the mail library then decoded into something else. Measured on
+# Python 3.11: one accepted value became two recipients in the stored draft.
+
+
+@pytest.mark.parametrize(
+    "addr",
+    [
+        "=?utf-8?q?evil=40x.org=2C_b?=@example.org",  # decodes to two recipients
+        "=?utf-8?q?a=0D=0ABcc:_evil=40x.org?=@example.org",  # decodes to CR LF + a header
+        "=?utf-8?b?ZXZpbEB4Lm9yZw==?=@example.org",
+        "a(comment)@example.org",
+        "a(b@example.org",
+        "group:b@example.org;",
+        "a@[192.0.2.1]",
+        "a@[192.0.2.1",
+        "a\\b@example.org",
+        "a@example.org.",
+        ".a@example.org",
+        "a..b@example.org",
+        "a@-example.org",
+        "a@example..org",
+    ],
+)
+@pytest.mark.parametrize("field", ["to", "cc"])
+def test_values_the_mail_library_would_reinterpret_are_refused(field, addr):
+    kw = {"to": ["ok@example.org"], "cc": []}
+    kw[field] = [*kw[field], addr]
+    with pytest.raises(ComposeError):
+        _new(**kw)
+
+
+@pytest.mark.parametrize(
+    "addr",
+    ["alex@example.org", "a.b+tag@sub.example.org", "o'neil_1@example-host.org", "x=y@example.org"],
+)
+def test_ordinary_addresses_are_accepted_and_stored_as_typed(addr):
+    msg = _new(to=[addr], cc=["sam@example.org"])
+    assert [a.addr_spec for a in msg["To"].addresses] == [addr]
+    assert all(a.display_name == "" for a in msg["To"].addresses)
+    line = next(ln for ln in msg.as_bytes().split(b"\n") if ln.lower().startswith(b"to:"))
+    assert line.strip() == b"To: " + addr.encode()
+
+
+def test_an_encoded_word_is_refused_even_with_the_address_rule_switched_off(monkeypatch):
+    """Second lock: the value is written as an address object, and the mail library
+    refuses an encoded-word there by itself."""
+    import mailbox_cleanup.manage.compose as compose_mod
+
+    monkeypatch.setattr(compose_mod, "is_bare_address", lambda v: True)  # first lock off
+    with pytest.raises(ComposeError, match="--to"):
+        _new(to=["=?utf-8?q?evil=40x.org=2C_b?=@example.org"])
+
+
+@pytest.mark.parametrize("field", ["to", "cc"])
+def test_a_header_that_holds_anything_but_the_given_addresses_is_refused(monkeypatch, field):
+    """Third lock, the read-back: the header is compared with the input after it is set.
+    No input is known that gets this far, so the parser surprise is simulated: the address
+    object silently becomes a different address."""
+    import mailbox_cleanup.manage.compose as compose_mod
+
+    real = compose_mod.Address
+    monkeypatch.setattr(
+        compose_mod,
+        "Address",
+        lambda addr_spec: real(
+            addr_spec="swapped@example.net" if addr_spec == "alex@example.org" else addr_spec
+        ),
+    )
+    kw = {"to": ["ok@example.org"], "cc": []}
+    kw[field] = ["alex@example.org"]
+    with pytest.raises(ComposeError, match=f"--{field}"):
+        _new(**kw)
+
+
+def test_a_display_name_appearing_in_the_header_is_refused(monkeypatch):
+    import mailbox_cleanup.manage.compose as compose_mod
+
+    real = compose_mod.Address
+    monkeypatch.setattr(
+        compose_mod, "Address", lambda addr_spec: real(display_name="Boss", addr_spec=addr_spec)
+    )
+    with pytest.raises(ComposeError, match="--to"):
+        _new()
