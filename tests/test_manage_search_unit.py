@@ -142,3 +142,52 @@ def test_both_paths_scale_short_lines_and_full_headers_only_for_the_top(post):
     assert max(len(line) for line in client.lines) < 8 * 1024
     assert sorted(client.full_header_uids) == [1, 2, 3, 4, 5]
     assert all(re.fullmatch(r"[\x20-\x7e]*", line) for line in client.lines)
+
+
+# --- `--recipient` (compose design §3: whom has the owner written to before) -----------
+
+
+@pytest.mark.parametrize("post", [b"IMAP4rev1", b"IMAP4rev1 SORT"])
+def test_recipient_filter_searches_the_to_header_and_nothing_else(post):
+    client = _FakeClient(3, caps_post=post)
+    search(_fake_mb(client), recipient="alex", limit=2)
+    (query,) = [ln for ln in client.lines if ln.startswith(("UID SORT", "UID SEARCH"))]
+    assert 'TO "alex"' in query
+    for other in ("FROM", "CC", "BCC", "SUBJECT", "TEXT", "BODY", "OR"):
+        assert f" {other} " not in f" {query} " and f"({other} " not in query
+
+
+def test_non_ascii_recipient_goes_out_as_a_literal_on_the_to_key():
+    client = _FakeClient(3, caps_post=b"IMAP4rev1 SORT")
+    search(_fake_mb(client), recipient="Jürgen", limit=2)
+    (query,) = [ln for ln in client.lines if ln.startswith("UID SEARCH")]
+    assert query.endswith(" TO") and "Jürgen" not in query
+    assert client.literal == "Jürgen".encode()
+
+
+def test_recipient_with_a_control_character_never_reaches_the_server():
+    client = _FakeClient(3)
+    with pytest.raises(ValueError, match="recipient"):
+        search(_fake_mb(client), recipient="x\r\nZ1 CREATE INJECTED")
+    assert client.lines == []
+
+
+def test_candidates_carry_the_to_header():
+    """Without it a Sent-folder hit shows only the owner's own From line, and the address
+    to confirm would need `manage read`, which returns a body."""
+
+    class _WithTo(_FakeClient):
+        def uid(self, command, *args):
+            typ, data = super().uid(command, *args)
+            if command.upper() == "FETCH" and "BODY.PEEK[HEADER]" in args[1]:
+                data = [
+                    (meta, hdr.replace(b"Subject:", b"To: Alex <alex@example.org>\r\nSubject:"))
+                    if isinstance(item, tuple)
+                    else item
+                    for item in data
+                    for meta, hdr in [item if isinstance(item, tuple) else (b"", b"")]
+                ]
+            return typ, data
+
+    hits = search(_fake_mb(_WithTo(2)), limit=2)
+    assert [h.to for h in hits] == ["alex@example.org", "alex@example.org"]

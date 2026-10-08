@@ -99,7 +99,7 @@ mailbox-autopilot config set-default work
 
 ### Claude Code plugin: `mailbox-autopilot`
 
-The repository ships as a Claude Code plugin with two skills, `cleanup` (triage, archive, delete, unsubscribe) and `manage` (search, read, follow threads, draft replies into your Drafts folder), plus a send-blocking hook. The plugin never sends mail: a reply lands in Drafts and you send it from your own mail client.
+The repository ships as a Claude Code plugin with two skills, `cleanup` (triage, archive, delete, unsubscribe) and `manage` (search, read, follow threads, draft replies and new mail into your Drafts folder), plus a send-blocking hook. The plugin never sends mail: a reply or a new mail lands in Drafts and you send it from your own mail client.
 
 Install from the Neckarshore marketplace:
 
@@ -108,6 +108,7 @@ Install from the Neckarshore marketplace:
 /plugin install mailbox-autopilot@neckarshore-ai
 ```
 
+- **A new mail:** `manage compose --to <address> --subject "<subject>" --body-file <file>` writes a mail that answers nothing into Drafts. To and Cc only (repeat the option, at most 10 addresses together, each one bare address). No Bcc, no attachment and no forwarding: those are refused with `out_of_scope`. `manage search --recipient <name>` matches the To header, so the skill can look up whom you have written to before; it shows you the address and waits for your yes.
 - **Attachments:** `manage read` lists a mail's attachments, and `manage save-attachment --uid <UID> --index <N> --out <path>` writes one to a path you name. It never overwrites a file, never writes hidden files, under `~/Library` or to a file name that is loaded automatically (such as `CLAUDE.md` or `conftest.py`), writes only inert formats (documents, spreadsheets, calendar files and images; no archive, script, plain-text, Markdown, JSON or macro file, and no name without an extension), and changes nothing in the mailbox.
 - **Prerequisite:** `uv` on your PATH. The plugin's `bin/mailbox-autopilot` launcher runs the CLI through `uv` from the plugin folder; without `uv` it stops with exit 127 and says so.
 - **The first call is slow and needs network.** `uv` builds the environment inside the plugin folder and may download Python 3.11+. That can take several seconds with no output; later calls are fast.
@@ -392,7 +393,7 @@ CI runs the same on every push. Greenmail starts on port 3143 (plain IMAP) + 302
 
 This repo is a **producer** for the neckarshore.ai estate test-count. On every `push:main`, CI counts the two gated pytest suites (unit + the live-Greenmail integration suite) from pytest's own `--collect-only` reporter — never grep — and publishes a contract-valid `stats.json` to the dedicated [`stats-data`](../../tree/stats-data/stats.json) branch: a single-file data branch, **not** `main`. `main` is a protected branch (a bot cannot push to it without weakening its protection), so the machine artifact lives on its own unprotected branch instead. The neckarshore.ai aggregator fetches it via `contents/stats.json?ref=stats-data`. Contract: [`stats-json-contract.md`](https://github.com/neckarshore-ai/neckarshore-planning/blob/main/docs/reference/stats-json-contract.md).
 
-## Limitations (v0.3)
+## Limitations (v0.4)
 
 1. Tested against IONOS and the GreenMail test server only. `--server` and `--port` take any IMAP host and folders are found by their standard special-use flags, but no other provider has been run. No Gmail API or Office365 support
 2. Strict dedupe — only by exact `Message-ID`; fuzzy hash = v2
