@@ -401,7 +401,7 @@ def outbox_cmd(json_mode):
 @click.option("--account", "account_flag", default=None)
 @click.option("--folder", default="INBOX", show_default=True)
 @click.option("--uid", required=True, help="UID of the mail being answered")
-@click.option("--body-file", required=True)  # plain str (Important 1 — see below)
+@click.option("--body-file", required=True, help="A text file in the outbox; see `manage outbox`.")
 @click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
 def draft_cmd(account_flag, folder, uid, body_file, json_mode):
     account, creds = _resolve(account_flag)
@@ -487,7 +487,7 @@ _OUT_OF_SCOPE = {
 @click.option("--to", "to", multiple=True, help="One bare address; repeat for more.")
 @click.option("--cc", "cc", multiple=True, help="One bare address; repeat for more.")
 @click.option("--subject", default=None)
-@click.option("--body-file", default=None, help="UTF-8 text file with the mail text.")
+@click.option("--body-file", default=None, help="A text file in the outbox; see `manage outbox`.")
 @click.option("--bcc", multiple=True, hidden=True)
 @click.option("--attach", multiple=True, hidden=True)
 @click.option("--attachment", multiple=True, hidden=True)

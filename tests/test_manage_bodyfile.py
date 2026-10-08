@@ -18,6 +18,11 @@ from mailbox_cleanup.cli import cli
 from mailbox_cleanup.manage import bodyfile
 from mailbox_cleanup.manage.bodyfile import MAX_BODY_BYTES, ensure_outbox, read_body_file
 
+# Bound at import, before the autouse fixture in tests/conftest.py replaces `outbox_dir`
+# with the test's tmp_path. Every other test runs against that replacement, so without
+# this name no test would notice a wrong production location.
+from mailbox_cleanup.manage.bodyfile import outbox_dir as _REAL_OUTBOX_DIR  # noqa: E402
+
 OUTSIDE = __file__  # a readable regular UTF-8 file that is not in the outbox
 
 
@@ -233,3 +238,23 @@ def test_both_drafting_commands_read_from_the_outbox_only(cmd, outbox, tmp_path,
     out = json.loads(res.output)
     assert out["error_code"] == "bad_args" and "manage outbox" in out["message"]
     assert OUTSIDE not in res.output
+
+
+def test_the_shipped_outbox_is_the_folder_from_the_user_database():
+    """Corruption probe that made this test necessary: `outbox_dir()` changed to return
+    the temp directory, and all 754 tests stayed green."""
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    assert _REAL_OUTBOX_DIR() == os.path.join(home, ".mailbox-cleanup", "outbox")
+    assert _REAL_OUTBOX_DIR() == bodyfile._default_outbox()
+
+
+def test_a_hard_link_to_an_existing_file_is_refused(outbox, tmp_path):
+    """A hard link is a regular file and no symlink, so it passes every other check, and
+    linking copies nothing. A file written fresh for a draft has exactly one name."""
+    secret = tmp_path / "secret.txt"
+    secret.write_text("PRIVATE KEY", encoding="utf-8")
+    linked = outbox / "body.txt"
+    os.link(secret, linked)
+    assert read_body_file(str(linked)) is None
+    secret.unlink()  # one name left: it is an ordinary file again
+    assert read_body_file(str(linked)) == "PRIVATE KEY"

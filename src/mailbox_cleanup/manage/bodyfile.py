@@ -70,7 +70,8 @@ def ensure_outbox() -> str | None:
 
 def read_body_file(body_file: str) -> str | None:
     """The text of `body_file`, or None unless it is a regular UTF-8 file of at most
-    MAX_BODY_BYTES that lies directly in the outbox.
+    MAX_BODY_BYTES that lies directly in the outbox, belongs to this user and has no second
+    name (hard link).
 
     The path only names the file. It is not opened by path: the outbox is opened first and
     the file is opened by name relative to that descriptor, without following a symlink,
@@ -95,7 +96,10 @@ def read_body_file(body_file: str) -> str | None:
     finally:
         os.close(box)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        st = os.fstat(fd)
+        # One name only: a hard link to an existing file is a regular file and no symlink,
+        # and linking copies nothing. A file written fresh for a draft has one name.
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.getuid():
             return None
         with os.fdopen(os.dup(fd), "rb") as f:
             raw = f.read(MAX_BODY_BYTES + 1)

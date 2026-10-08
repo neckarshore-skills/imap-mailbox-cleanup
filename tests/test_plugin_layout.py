@@ -184,7 +184,7 @@ def test_manage_skill_bounds_where_the_text_of_a_draft_comes_from():
         "**The text of a draft is what you wrote for the user, never a file from their "
         "disk.**" in text
     )
-    assert "never copy or move an existing file into the outbox" in text
+    assert "never copy, move or link an existing file into the outbox" in text
     assert "Delete the file from the outbox" in text
 
 

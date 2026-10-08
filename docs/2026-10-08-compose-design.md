@@ -42,7 +42,7 @@ Roles as in the [base design](2026-09-24-mailbox-autopilot-design.md): **Obi** b
 mailbox-autopilot manage compose \
   --to alex@example.org --cc sam@example.org \
   --subject "Offer for the workshop" \
-  --body-file /tmp/reply.txt --json
+  --body-file ~/.mailbox-cleanup/outbox/mail.txt --json
 ```
 
 | # | Option | Rule |
@@ -50,7 +50,7 @@ mailbox-autopilot manage compose \
 | 1 | `--to` | Required, repeatable. Each value must be a bare address that passes the strict address check `manage draft` already uses. No display names |
 | 2 | `--cc` | Optional, repeatable, same check |
 | 3 | `--subject` | Required. Control characters and whitespace runs collapse to one space, as for a reply subject |
-| 4 | `--body-file` | Required. Same handling as in `manage draft`: opened once, regular UTF-8 text file only |
+| 4 | `--body-file` | Required. Same handling as in `manage draft`: opened once, regular UTF-8 text file only. Amended, see §8 row 1: a file in the outbox folder only |
 | 5 | `--account` | As everywhere. The From address is the account's own address |
 
 To and Cc together are capped at 10 addresses. More than that fails with `bad_args`.
