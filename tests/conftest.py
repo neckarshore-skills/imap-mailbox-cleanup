@@ -81,6 +81,16 @@ def fresh_mailbox(greenmail):
 
 
 @pytest.fixture(autouse=True)
+def _outbox_is_the_test_tmp_dir(tmp_path, monkeypatch):
+    """`manage draft` and `manage compose` read their text from the tool's outbox folder
+    only. In tests that folder is the test's own tmp_path, so a body file a test writes
+    there is readable and nothing touches the real ~/.mailbox-cleanup/outbox."""
+    from mailbox_cleanup.manage import bodyfile
+
+    monkeypatch.setattr(bodyfile, "outbox_dir", lambda: str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
 def _disable_ssl_for_tests(monkeypatch):
     """All tests run against plain IMAP — set env so imap_connect uses MailBoxUnencrypted."""
     monkeypatch.setenv("MAILBOX_CLEANUP_SSL", "0")

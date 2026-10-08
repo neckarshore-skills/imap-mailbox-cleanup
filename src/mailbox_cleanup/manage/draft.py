@@ -15,17 +15,11 @@ from email.utils import formatdate, make_msgid, parseaddr
 from imap_tools import MailMessageFlags
 
 from ..folders import resolve_folder
+from .headers import clean_header_value, is_bare_address
 from .ids import safe_message_id
 from .read import Message
 
 _RE_PREFIX = re.compile(r"^\s*(re|aw|antw)\s*:", re.IGNORECASE)
-
-# R3: EmailMessage() (default policy) raises ValueError on a raw CR/LF in a header
-# value; a hostile decoded Subject/To must still produce a draft. Control characters
-# (C0 `\x00-\x1f`, DEL `\x7f`, and C1 `\x80-\x9f` — e.g. U+0085 NEL, which some decoders
-# treat as a line break) and whitespace runs collapse to a single space before a header
-# is set.
-_CONTROL_OR_WS_RUN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]+|\s+")
 
 # R1: cap the outgoing References chain at the tail of this many IDs (the most recent
 # ancestors plus the original's own Message-ID, always last) — the same "keep the tail"
@@ -34,19 +28,9 @@ _CONTROL_OR_WS_RUN_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]+|\s+")
 # In-Reply-To and the last IDs.
 _MAX_REFERENCES = 20
 
-# Fix round 2 (Minor 2+3 reopened): a strict addr-spec — exactly one '@', a non-empty
-# local part and domain, no whitespace, angle bracket, comma, quote or control character.
-# `@` itself is excluded from both sides too, so "exactly one '@'" is structural, not just
-# a side-effect of `fullmatch` — a second '@' anywhere fails the whole match.
-_STRICT_ADDR_RE = re.compile(r'^[^\s<>,"@\x00-\x1f\x7f-\x9f]+@[^\s<>,"@\x00-\x1f\x7f-\x9f]+$')
-
 
 class NoDraftsFolderError(Exception):
     """No \\Drafts folder was found. Spec §7.2: stop; never create one on a guess."""
-
-
-def _clean_header_value(value: str) -> str:
-    return _CONTROL_OR_WS_RUN_RE.sub(" ", value).strip()
 
 
 def build_reply(original: Message, *, from_addr: str, body: str) -> tuple[EmailMessage, list[str]]:
@@ -62,7 +46,7 @@ def build_reply(original: Message, *, from_addr: str, body: str) -> tuple[EmailM
     warnings: list[str] = []
     msg = EmailMessage()
 
-    subject = _clean_header_value(original.subject or "")
+    subject = clean_header_value(original.subject or "")
     msg["Subject"] = subject if _RE_PREFIX.match(subject) else f"Re: {subject}".strip()
     msg["From"] = from_addr
 
@@ -72,12 +56,12 @@ def build_reply(original: Message, *, from_addr: str, body: str) -> tuple[EmailM
     # 3.12/3.13/3.14 (pyproject allows any of these: requires-python >=3.11, no upper
     # bound), so exception-catching alone is fail-open on newer interpreters. Instead:
     # parse with parseaddr and accept the result only if it is a single, strict addr-spec
-    # (_STRICT_ADDR_RE). The bare address (no display name) is the safe value we set — a
+    # (headers.is_bare_address). The bare address (no display name) is the safe value we set — a
     # display name is untrusted, mail-derived text and re-parsing it buys nothing here.
     # The try/except below is a second-layer guard only, never the mechanism: a value
     # that already passed the strict check is not expected to raise.
     _, parsed_addr = parseaddr(original.reply_to or original.sender)
-    if parsed_addr and _STRICT_ADDR_RE.fullmatch(parsed_addr):
+    if parsed_addr and is_bare_address(parsed_addr):
         try:
             msg["To"] = parsed_addr
         except Exception:

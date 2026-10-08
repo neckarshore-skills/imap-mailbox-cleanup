@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
-import stat
 import sys
 from collections.abc import Iterable
 
@@ -18,6 +16,7 @@ from ..auth import AuthMissingError
 from ..cli_helpers import AccountFlagsError, resolve_account_and_credentials
 from ..config import Account
 from ..imap_client import imap_connect
+from . import bodyfile
 from .args import unsafe_arg_keys
 from .attachments import (
     DestinationError,
@@ -26,6 +25,7 @@ from .attachments import (
     resolve_destination,
     write_exclusive,
 )
+from .compose import ComposeError, build_new
 from .draft import NoDraftsFolderError, build_reply, save_draft
 from .envelope import wrap
 from .ids import safe_message_id
@@ -100,23 +100,26 @@ def _arg_keys(**given) -> list[str]:
 
 @click.group("manage")
 def manage():
-    """Search, read, follow threads and draft replies. Never sends, deletes or moves."""
+    """Search, read, follow threads, draft replies and new mail. Never sends, deletes or moves."""
 
 
 @manage.command("search")
 @click.option("--account", "account_flag", default=None)
 @click.option("--folder", default="INBOX", show_default=True)
 @click.option("--sender", default=None)
+@click.option("--recipient", default=None, help="Matches the To header only.")
 @click.option("--subject", default=None)
 @click.option("--text", default=None)
 @click.option("--since", default=None, help="YYYY-MM-DD, compared with the Date header")
 @click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
 @click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
-def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_mode):
+def search_cmd(account_flag, folder, sender, recipient, subject, text, since, limit, json_mode):
     account, creds = _resolve(account_flag)
-    keys = _arg_keys(sender=sender, subject=subject, text=text, since=since)
+    keys = _arg_keys(sender=sender, recipient=recipient, subject=subject, text=text, since=since)
     fail = dict(subcommand="manage.search", account=account, folder=folder, arg_keys=keys)
-    _reject_control_chars(fail, folder=folder, sender=sender, subject=subject, text=text)
+    _reject_control_chars(
+        fail, folder=folder, sender=sender, recipient=recipient, subject=subject, text=text
+    )
     try:
         since_d = datetime.date.fromisoformat(since) if since else None
     except ValueError:
@@ -127,6 +130,7 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
                 mb,
                 folder=folder,
                 sender=sender,
+                recipient=recipient,
                 subject=subject,
                 text=text,
                 since=since_d,
@@ -157,7 +161,9 @@ def search_cmd(account_flag, folder, sender, subject, text, since, limit, json_m
                 {
                     "uid": h.uid,
                     "date": h.date,
-                    "mail": wrap(f"From: {h.sender}\nSubject: {h.subject}"),
+                    # To is shown so a Sent-folder hit names whom the owner wrote to; like
+                    # From and Subject it is mail content and stays inside the envelope.
+                    "mail": wrap(f"From: {h.sender}\nTo: {h.to}\nSubject: {h.subject}"),
                 }
                 for h in hits
             ],
@@ -361,11 +367,41 @@ def thread_cmd(account_flag, folder, uid, json_mode):
     )
 
 
+_BODY_FILE_MESSAGE = (
+    "--body-file must be a regular UTF-8 text file of at most 1 MB that lies directly in "
+    "the outbox folder; `manage outbox` creates the folder and prints its path"
+)
+
+
+@manage.command("outbox")
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def outbox_cmd(json_mode):
+    """Create the outbox folder if it is missing and print its path. `manage draft` and
+    `manage compose` read their text from a file in this folder only. Touches no account
+    and no mailbox, so it is not audited."""
+    path = bodyfile.ensure_outbox()
+    if path is None:
+        _fail(
+            "outbox_unusable",
+            "the outbox folder must be a real directory that only you can read "
+            f"(mode 700): {bodyfile.outbox_dir()}",
+            4,
+        )
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.outbox",
+            "path": path,
+            "max_bytes": bodyfile.MAX_BODY_BYTES,
+        }
+    )
+
+
 @manage.command("draft")
 @click.option("--account", "account_flag", default=None)
 @click.option("--folder", default="INBOX", show_default=True)
 @click.option("--uid", required=True, help="UID of the mail being answered")
-@click.option("--body-file", required=True)  # plain str (Important 1 — see below)
+@click.option("--body-file", required=True, help="A text file in the outbox; see `manage outbox`.")
 @click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
 def draft_cmd(account_flag, folder, uid, body_file, json_mode):
     account, creds = _resolve(account_flag)
@@ -381,43 +417,12 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
         _fail_audited(
             **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
         )
-    # Important 1: --body-file is a plain str, not click.Path(...). Measured empirically:
-    # click.Path(exists=True, dir_okay=False) rejects a missing/unreadable file itself
-    # (exit 2, click usage text, no JSON, no audit) before this function ever runs — the
-    # violation this fixes. The seemingly obvious repair, click.Path(dir_okay=False,
-    # exists=False, readable=False), does NOT fully fix it either: its dir_okay=False
-    # check runs unconditionally whenever os.stat() succeeds (i.e. whenever the path
-    # exists at all, regardless of `exists=`), so a directory path is still rejected by
-    # Click itself, not by us. A plain str defers ALL of missing/unreadable/directory to
-    # our own open() below, uniformly audited bad_args.
-    #
-    # A FIFO (named pipe) given as --body-file would make a blocking open() wait forever
-    # for a writer. A separate type check before open() by path is not enough (CodeRabbit
-    # on #45): the path can be swapped for a FIFO between check and open. So the file is
-    # opened ONCE, non-blocking, and the type is checked on that descriptor -- the object
-    # that is then read. Missing, unreadable, directory and non-regular paths all end in
-    # the same audited bad_args, exit 4.
-    body = None
-    try:
-        fd = os.open(body_file, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
-    except OSError:
-        fd = None
-    if fd is not None:
-        if stat.S_ISREG(os.fstat(fd).st_mode):
-            try:
-                with os.fdopen(fd, encoding="utf-8") as f:
-                    body = f.read()
-            except (OSError, UnicodeDecodeError):
-                body = None
-        else:
-            os.close(fd)
+    # --body-file is a plain str, not click.Path(...): click would reject a missing file or
+    # a directory itself (exit 2, usage text, no JSON, no audit). Every refusal of the file
+    # ends in the same audited bad_args; see manage/bodyfile.py for the rules.
+    body = bodyfile.read_body_file(body_file)
     if body is None:
-        _fail_audited(
-            **fail,
-            code="bad_args",
-            message="--body-file must be a readable regular UTF-8 text file",
-            exit_code=4,
-        )
+        _fail_audited(**fail, code="bad_args", message=_BODY_FILE_MESSAGE, exit_code=4)
     not_found = False
     try:
         with imap_connect(creds, port=account.port) as mb:
@@ -460,6 +465,123 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
             # msg["To"] can be None (Minor 2+3: no usable sender address) — a warning
             # already covers that case, this just avoids wrap() crashing on None.
             "to": wrap(msg["To"] or ""),
+        }
+    )
+
+
+# Ticket criterion 5: what version 1 leaves out is refused by name. Without these hidden
+# options click would answer "No such option", which reads like a typo to retry in another
+# spelling rather than a boundary. `--uid` is here because it is what a forwarding attempt
+# passes. They take a value so that value is consumed and never echoed.
+_OUT_OF_SCOPE = {
+    "bcc": "--bcc",
+    "attach": "--attach",
+    "attachment": "--attachment",
+    "forward": "--forward",
+    "uid": "--uid",
+}
+
+
+@manage.command("compose")
+@click.option("--account", "account_flag", default=None)
+@click.option("--to", "to", multiple=True, help="One bare address; repeat for more.")
+@click.option("--cc", "cc", multiple=True, help="One bare address; repeat for more.")
+@click.option("--subject", default=None)
+@click.option("--body-file", default=None, help="A text file in the outbox; see `manage outbox`.")
+@click.option("--bcc", multiple=True, hidden=True)
+@click.option("--attach", multiple=True, hidden=True)
+@click.option("--attachment", multiple=True, hidden=True)
+@click.option("--forward", multiple=True, hidden=True)
+@click.option("--uid", multiple=True, hidden=True)
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def compose_cmd(
+    account_flag, to, cc, subject, body_file, bcc, attach, attachment, forward, uid, json_mode
+):
+    """Put a NEW mail into the Drafts folder. To and Cc only. Never sends."""
+    account, creds = _resolve(account_flag)
+    refused = dict(bcc=bcc, attach=attach, attachment=attachment, forward=forward, uid=uid)
+    arg_keys = _arg_keys(to=to, cc=cc, subject=subject, body_file=body_file, **refused)
+    # No source folder exists for a new mail; the Drafts folder is recorded on success.
+    fail = dict(subcommand="manage.compose", account=account, folder="", arg_keys=arg_keys)
+    given = [_OUT_OF_SCOPE[k] for k, v in refused.items() if v]
+    if given:
+        _fail_audited(
+            **fail,
+            code="out_of_scope",
+            message=(
+                f"{', '.join(given)} is outside what `manage compose` does: it writes a new "
+                "mail with To and Cc only. No Bcc, no attachment, no forwarding of an "
+                "existing mail. The user adds those in their mail client"
+            ),
+            exit_code=4,
+        )
+    # Required options are checked here, not by click (`required=True`): click would print
+    # usage text with exit 2, no JSON and no audit record.
+    missing = [
+        opt
+        for opt, value in (
+            ("--to", to),
+            ("--subject", (subject or "").strip()),
+            ("--body-file", body_file),
+        )
+        if not value
+    ]
+    if missing:
+        _fail_audited(
+            **fail,
+            code="bad_args",
+            message=f"{', '.join(missing)} is required; no draft was written",
+            exit_code=4,
+        )
+    body = bodyfile.read_body_file(body_file)
+    if body is None:
+        _fail_audited(**fail, code="bad_args", message=_BODY_FILE_MESSAGE, exit_code=4)
+    # The message is built before the mailbox is touched: a refused address or an
+    # over-long recipient list costs no IMAP call. ComposeError names the rule only.
+    try:
+        msg = build_new(from_addr=account.email, to=to, cc=cc, subject=subject, body=body)
+    except ComposeError as e:
+        _fail_audited(**fail, code="bad_args", message=str(e), exit_code=4)
+    except Exception as e:  # never str(e): it can echo an argument
+        _fail_audited(
+            **fail,
+            code="bad_args",
+            message=f"the mail could not be built ({type(e).__name__}); no draft was written",
+            exit_code=4,
+        )
+    try:
+        with imap_connect(creds, port=account.port) as mb:
+            drafts = save_draft(mb, msg)
+    except NoDraftsFolderError:  # never str(e) — a literal message
+        _fail_audited(
+            **fail, code="no_drafts_folder", message="no Drafts folder found", exit_code=5
+        )
+    except Exception as e:  # never str(e): server text can echo mail content
+        _fail_audited(
+            **fail,
+            code="operation_error",
+            message=f"IMAP operation failed ({type(e).__name__})",
+            exit_code=2,
+        )
+    log_manage_action(
+        subcommand="manage.compose",
+        account=account.alias,
+        folder=drafts,
+        uids=[],
+        result="success",
+        arg_keys=arg_keys,
+    )
+    # Recipients and subject are read back from the built message, not echoed from the
+    # arguments, so the skill shows the owner what is in the draft. They are this command's
+    # own checked arguments, not mail content: no envelope.
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.compose",
+            "drafts_folder": drafts,
+            "to": [a.addr_spec for a in msg["To"].addresses],
+            "cc": [a.addr_spec for a in msg["Cc"].addresses] if msg["Cc"] else [],
+            "subject": msg["Subject"],
         }
     )
 

@@ -149,3 +149,29 @@ def test_two_non_ascii_filters_intersect(fresh_mailbox, open_mb, seed_raw):
         subject_only = search(mb, subject="Größe")
     assert len(subject_only) == 2
     assert [(h.subject, h.date[:13]) for h in both] == [("Größe der Lieferung", "2026-09-21T09")]
+
+
+def test_recipient_filter_matches_the_to_header_and_nothing_else(fresh_mailbox, open_mb, seed_raw):
+    """Compose design §6.3. The same address sits in To, From, Cc and Subject of four
+    different mails; only the mail that carries it in To may come back. (Full addresses:
+    GreenMail 2.1.0 matches address headers only against the full address.)"""
+
+    def _m(sender: str, to: str, cc: str, subject: str, hour: int) -> bytes:
+        head = f"From: {sender}\r\nTo: {to}\r\n"
+        if cc:
+            head += f"Cc: {cc}\r\n"
+        head += f"Subject: {subject}\r\nDate: Mon, 21 Sep 2026 {hour:02d}:00:00 +0200\r\n"
+        return (head + "\r\nalex@example.org is mentioned in this body\r\n").encode()
+
+    seed_raw(
+        _m("test@localhost", "alex@example.org", "", "in To", 9),
+        _m("alex@example.org", "test@localhost", "", "in From", 10),
+        _m("kim@example.org", "test@localhost", "alex@example.org", "in Cc", 11),
+        _m("kim@example.org", "test@localhost", "", "about alex@example.org", 12),
+    )
+    with open_mb(fresh_mailbox) as mb:
+        everything = search(mb, limit=10)
+        hits = search(mb, recipient="alex@example.org", limit=10)
+    assert len(everything) == 4
+    assert [h.subject for h in hits] == ["in To"]
+    assert hits[0].to == "alex@example.org"

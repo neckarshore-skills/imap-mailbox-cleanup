@@ -138,3 +138,15 @@ def test_account_flags_error_carries_error_code():
     err = AccountFlagsError("unknown_account", "test message")
     assert err.error_code == "unknown_account"
     assert "test message" in str(err)
+
+
+def test_email_deprecation_names_no_version():
+    """Founder decision 2026-10-08: the flag stays, and the message stops promising a
+    version. It said "Removed in v0.3", then "v0.4", and each release made it false."""
+    import inspect
+
+    from mailbox_cleanup import cli_helpers
+
+    src = inspect.getsource(cli_helpers)
+    assert "--email is deprecated" in src
+    assert "Removed in v" not in src

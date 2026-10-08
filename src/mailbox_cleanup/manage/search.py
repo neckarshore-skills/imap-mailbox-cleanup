@@ -44,6 +44,7 @@ class Candidate:
     sender: str
     subject: str
     date: str
+    to: str = ""  # the To header's addresses, comma-separated
 
 
 @dataclass(frozen=True)
@@ -197,7 +198,7 @@ def _fetch(mb, uids: list[str], part: str) -> list[_Row]:
     return rows
 
 
-def _criteria(sender, subject, text, since) -> tuple[str, list[tuple[str, str]]]:
+def _criteria(sender, subject, text, since, recipient=None) -> tuple[str, list[tuple[str, str]]]:
     """Split filters into an ASCII criteria string and non-ASCII (key, value) pairs.
 
     Non-ASCII values go to the server as IMAP literals (RFC 3501 does not allow 8-bit
@@ -206,6 +207,7 @@ def _criteria(sender, subject, text, since) -> tuple[str, list[tuple[str, str]]]
     literals: list[tuple[str, str]] = []
     for key, imap_key, value in (
         ("from_", "FROM", sender),
+        ("to", "TO", recipient),
         ("subject", "SUBJECT", subject),
         ("text", "TEXT", text),
     ):
@@ -240,6 +242,7 @@ def search(
     *,
     folder: str = "INBOX",
     sender: str | None = None,
+    recipient: str | None = None,
     subject: str | None = None,
     text: str | None = None,
     since: datetime.date | None = None,
@@ -252,19 +255,22 @@ def search(
     With server SORT (all filters ASCII), SORT preselects `limit + slack` UIDs; otherwise
     only the Date header and INTERNALDATE of every match are fetched. Either way the
     window is ordered here with the same key, and full headers are fetched only for the
-    top `limit`. `since` compares against the Date header (IMAP SENTSINCE).
+    top `limit`. `since` compares against the Date header (IMAP SENTSINCE). `recipient`
+    matches the To header only (IMAP TO), never Cc, From or the body.
 
     Read-only by construction. The no-destructive guard
     (tests/test_manage_no_destructive.py) is a spelling check that catches mistakes,
     such as a copied destructive method call or IMAP command string; it is not a proof
     against intent, since a command assembled at runtime passes it. Review stays the
     gate."""
-    bad = unsafe_arg_keys(folder=folder, sender=sender, subject=subject, text=text)
+    bad = unsafe_arg_keys(
+        folder=folder, sender=sender, recipient=recipient, subject=subject, text=text
+    )
     if bad:
         raise ValueError(f"control characters in: {', '.join(bad)}")
     limit = max(limit, 0)
     mb.folder.set(folder)
-    base, literals = _criteria(sender, subject, text, since)
+    base, literals = _criteria(sender, subject, text, since, recipient)
     if not literals and _has_sort(mb):
         # SORT's criteria are ASCII only here: GreenMail's SORT cannot evaluate literals.
         uids = _uid_list(_uid_cmd(mb, "SORT", "(REVERSE DATE)", "UTF-8", base))
@@ -288,6 +294,7 @@ def search(
                 sender=msg.from_ or "",
                 subject=msg.subject or "",
                 date=d.isoformat() if d else "",
+                to=", ".join(msg.to),
             )
         )
     return candidates

@@ -42,7 +42,7 @@ Roles as in the [base design](2026-09-24-mailbox-autopilot-design.md): **Obi** b
 mailbox-autopilot manage compose \
   --to alex@example.org --cc sam@example.org \
   --subject "Offer for the workshop" \
-  --body-file /tmp/reply.txt --json
+  --body-file ~/.mailbox-cleanup/outbox/mail.txt --json
 ```
 
 | # | Option | Rule |
@@ -50,7 +50,7 @@ mailbox-autopilot manage compose \
 | 1 | `--to` | Required, repeatable. Each value must be a bare address that passes the strict address check `manage draft` already uses. No display names |
 | 2 | `--cc` | Optional, repeatable, same check |
 | 3 | `--subject` | Required. Control characters and whitespace runs collapse to one space, as for a reply subject |
-| 4 | `--body-file` | Required. Same handling as in `manage draft`: opened once, regular UTF-8 text file only |
+| 4 | `--body-file` | Required. Same handling as in `manage draft`: opened once, regular UTF-8 text file only. Amended, see §8 row 1: a file in the outbox folder only |
 | 5 | `--account` | As everywhere. The From address is the account's own address |
 
 To and Cc together are capped at 10 addresses. More than that fails with `bad_args`.
@@ -115,4 +115,17 @@ What stays true: the tool cannot send. The worst case is a bad draft that the ow
 3. Playbooks for outbound mail types.
 4. A persistent address book. The lookup in §3 reads the mailbox each time and stores nothing.
 
-**Version:** the build ships as 0.4.0. This document changes no code and no version.
+## 8. Amendments from the build (2026-10-08)
+
+The build and its two security reviews changed four things against the sections above. Each is listed with its cause.
+
+| # | Section | Amendment | Cause |
+|---|---------|-----------|-------|
+| 1 | §3 row 4 | `--body-file` of `manage compose` AND of `manage draft` must be a file directly in the tool's own folder `~/.mailbox-cleanup/outbox/` (private to the user, located from the user database and not from any environment variable), at most 1 MB, no symlink. New command `manage outbox` creates the folder and prints its path | Two Founder decisions of 2026-10-08 after two review rounds. Round 1: a free recipient plus a free file read lets one command stage any readable local file as a draft. The first answer, "temp directory only", failed round 2: the temp directory comes from `TMPDIR`, which the constrained caller sets, and it is shared with other programs. Round 2 also showed that `manage draft` has the same read, and its recipient is the sender of the answered mail, who in the attack case is the attacker. The rule removes the one-command path and does not stop a file that was first copied into the outbox |
+| 2 | §3 rows 1 and 2 | The address check is an allowlist (atoms and letter-digit-hyphen labels), an RFC 2047 encoded-word is refused, addresses are written as address objects, and the header is read back and compared with the input. The response reports the addresses read back from the message | Review finding, measured on Python 3.11: under the earlier denylist one accepted value was stored as two recipients |
+| 3 | §3 "Looking up a recipient" | Search candidates carry the To header, inside the envelope | A Sent-folder hit otherwise shows only the owner's own From line, and the address to confirm would need `manage read`, which returns a body |
+| 4 | §1 non-goals 2 to 4 | `--bcc`, `--attach`, `--attachment`, `--forward` and `--uid` exist as hidden options that refuse with `out_of_scope` | Ticket criterion 5 asks for a refusal that points to the scope; an unknown option would be answered with "No such option" |
+
+**Not covered by any test:** a lookup by name (`--recipient Alex`). The test mail server matches address headers only against the full address, so only the full-address path is tested. The acceptance run on real mail covers it.
+
+**Version:** the build ships as 0.4.0.
