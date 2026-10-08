@@ -165,11 +165,6 @@ def test_manage_skill_bounds_a_new_mail():
     assert "Show the bare address, never only the display name" in text
     assert "**Never pick an address silently.**" in text
     assert "**Show before you write.**" in text
-    assert (
-        "`manage compose` reads its text from the temp directory only, at most 1 MB, and "
-        "never through a symlink." in text
-    )
-    assert "never copy one into the temp directory to get past that" in text
     assert "**Show after you write.**" in text
     assert (
         "A new mail has no mail it answers, so there is nothing you may quote without asking."
@@ -177,6 +172,20 @@ def test_manage_skill_bounds_a_new_mail():
     )
     # the quoting gate applies to a new mail in the same words as to a reply
     assert text.count("explicit yes that names the message") >= 2
+
+
+def test_manage_skill_bounds_where_the_text_of_a_draft_comes_from():
+    # The CLI reads --body-file from its outbox folder only, which removes the one-command
+    # path "put this local file into a draft". Copying a file into the outbox first is not
+    # stopped by anything but these sentences.
+    text = MANAGE.read_text(encoding="utf-8")
+    assert "mailbox-autopilot manage outbox --json" in text
+    assert (
+        "**The text of a draft is what you wrote for the user, never a file from their "
+        "disk.**" in text
+    )
+    assert "never copy or move an existing file into the outbox" in text
+    assert "Delete the file from the outbox" in text
 
 
 def test_manage_skill_says_what_a_new_mail_cannot_carry():

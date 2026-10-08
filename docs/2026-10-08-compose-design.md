@@ -117,11 +117,11 @@ What stays true: the tool cannot send. The worst case is a bad draft that the ow
 
 ## 8. Amendments from the build (2026-10-08)
 
-The build and its security review changed four things against the sections above. Each is listed with its cause.
+The build and its two security reviews changed four things against the sections above. Each is listed with its cause.
 
 | # | Section | Amendment | Cause |
 |---|---------|-----------|-------|
-| 1 | §3 row 4 | `--body-file` of `manage compose` must lie in the temp directory, hold at most 1 MB and not be reached through a symlink. `manage draft` is unchanged | Founder decision 2026-10-08, 18:02 CEST, after the review: a free recipient plus a free file read lets a deceived agent stage any readable local file as a draft to an outside address. This lengthens that path and does not close it; a file can be copied into the temp directory first |
+| 1 | §3 row 4 | `--body-file` of `manage compose` AND of `manage draft` must be a file directly in the tool's own folder `~/.mailbox-cleanup/outbox/` (private to the user, located from the user database and not from any environment variable), at most 1 MB, no symlink. New command `manage outbox` creates the folder and prints its path | Two Founder decisions of 2026-10-08 after two review rounds. Round 1: a free recipient plus a free file read lets one command stage any readable local file as a draft. The first answer, "temp directory only", failed round 2: the temp directory comes from `TMPDIR`, which the constrained caller sets, and it is shared with other programs. Round 2 also showed that `manage draft` has the same read, and its recipient is the sender of the answered mail, who in the attack case is the attacker. The rule removes the one-command path and does not stop a file that was first copied into the outbox |
 | 2 | §3 rows 1 and 2 | The address check is an allowlist (atoms and letter-digit-hyphen labels), an RFC 2047 encoded-word is refused, addresses are written as address objects, and the header is read back and compared with the input. The response reports the addresses read back from the message | Review finding, measured on Python 3.11: under the earlier denylist one accepted value was stored as two recipients |
 | 3 | §3 "Looking up a recipient" | Search candidates carry the To header, inside the envelope | A Sent-folder hit otherwise shows only the owner's own From line, and the address to confirm would need `manage read`, which returns a body |
 | 4 | §1 non-goals 2 to 4 | `--bcc`, `--attach`, `--attachment`, `--forward` and `--uid` exist as hidden options that refuse with `out_of_scope` | Ticket criterion 5 asks for a refusal that points to the scope; an unknown option would be answered with "No such option" |

@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
-import stat
 import sys
-import tempfile
 from collections.abc import Iterable
 
 import click
@@ -19,6 +16,7 @@ from ..auth import AuthMissingError
 from ..cli_helpers import AccountFlagsError, resolve_account_and_credentials
 from ..config import Account
 from ..imap_client import imap_connect
+from . import bodyfile
 from .args import unsafe_arg_keys
 from .attachments import (
     DestinationError,
@@ -369,80 +367,34 @@ def thread_cmd(account_flag, folder, uid, json_mode):
     )
 
 
-# `manage compose` reads its text from here only (Founder decision 2026-10-08). The skill
-# writes the mail text to a temporary file anyway, and a free recipient plus a free file
-# read would let a deceived agent stage any readable local file as a draft to an outside
-# address. This lengthens that path, it does not close it: a file can be copied into the
-# temp directory first.
-MAX_BODY_BYTES = 1024 * 1024
+_BODY_FILE_MESSAGE = (
+    "--body-file must be a regular UTF-8 text file of at most 1 MB that lies directly in "
+    "the outbox folder; `manage outbox` creates the folder and prints its path"
+)
 
 
-def _real_path_in_temp(path: str) -> str | None:
-    """The real path of `path` when it lies in the temp directory and no component below
-    the temp root is a symlink; otherwise None.
-
-    The temp root itself may be named through a system symlink (macOS: /tmp and /var point
-    into /private), so the root is resolved and everything below it is walked by hand."""
-    absolute = os.path.abspath(path)
-    for named in (tempfile.gettempdir(), "/tmp"):
-        root = os.path.realpath(named)
-        for prefix in (named, root):
-            if not absolute.startswith(prefix.rstrip(os.sep) + os.sep):
-                continue
-            current = root
-            for part in absolute[len(prefix.rstrip(os.sep)) + 1 :].split(os.sep):
-                if part in ("", ".", ".."):
-                    return None
-                current = os.path.join(current, part)
-                if os.path.islink(current):
-                    return None
-            return current
-    return None
-
-
-def _read_body_file(body_file: str, *, temp_only: bool = False) -> str | None:
-    """The text of --body-file, or None when it is not a readable regular UTF-8 file.
-    Shared by `manage draft` and `manage compose`.
-
-    With `temp_only` (compose) the file must also lie in the temp directory without any
-    symlink on the way, and hold at most MAX_BODY_BYTES."""
-    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-    if temp_only:
-        body_file = _real_path_in_temp(body_file)
-        if body_file is None:
-            return None
-        # O_NOFOLLOW repeats the symlink check for the last component at open time. A
-        # directory swapped for a symlink between the walk and the open is not covered.
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-    # Important 1: --body-file is a plain str, not click.Path(...). Measured empirically:
-    # click.Path(exists=True, dir_okay=False) rejects a missing/unreadable file itself
-    # (exit 2, click usage text, no JSON, no audit) before this function ever runs — the
-    # violation this fixes. The seemingly obvious repair, click.Path(dir_okay=False,
-    # exists=False, readable=False), does NOT fully fix it either: its dir_okay=False
-    # check runs unconditionally whenever os.stat() succeeds (i.e. whenever the path
-    # exists at all, regardless of `exists=`), so a directory path is still rejected by
-    # Click itself, not by us. A plain str defers ALL of missing/unreadable/directory to
-    # our own open() below, uniformly audited bad_args.
-    #
-    # A FIFO (named pipe) given as --body-file would make a blocking open() wait forever
-    # for a writer. A separate type check before open() by path is not enough (CodeRabbit
-    # on #45): the path can be swapped for a FIFO between check and open. So the file is
-    # opened ONCE, non-blocking, and the type is checked on that descriptor -- the object
-    # that is then read. Missing, unreadable, directory and non-regular paths all end in
-    # the same audited bad_args, exit 4.
-    try:
-        fd = os.open(body_file, flags)
-    except OSError:
-        return None
-    st = os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode) or (temp_only and st.st_size > MAX_BODY_BYTES):
-        os.close(fd)
-        return None
-    try:
-        with os.fdopen(fd, encoding="utf-8") as f:
-            return f.read()
-    except (OSError, UnicodeDecodeError):
-        return None
+@manage.command("outbox")
+@click.option("--json", "json_mode", is_flag=True, help="Accepted for symmetry; output is JSON.")
+def outbox_cmd(json_mode):
+    """Create the outbox folder if it is missing and print its path. `manage draft` and
+    `manage compose` read their text from a file in this folder only. Touches no account
+    and no mailbox, so it is not audited."""
+    path = bodyfile.ensure_outbox()
+    if path is None:
+        _fail(
+            "outbox_unusable",
+            "the outbox folder must be a real directory that only you can read "
+            f"(mode 700): {bodyfile.outbox_dir()}",
+            4,
+        )
+    _out(
+        {
+            "ok": True,
+            "subcommand": "manage.outbox",
+            "path": path,
+            "max_bytes": bodyfile.MAX_BODY_BYTES,
+        }
+    )
 
 
 @manage.command("draft")
@@ -465,14 +417,12 @@ def draft_cmd(account_flag, folder, uid, body_file, json_mode):
         _fail_audited(
             **fail, code="bad_args", message="--uid must contain only ASCII digits", exit_code=4
         )
-    body = _read_body_file(body_file)
+    # --body-file is a plain str, not click.Path(...): click would reject a missing file or
+    # a directory itself (exit 2, usage text, no JSON, no audit). Every refusal of the file
+    # ends in the same audited bad_args; see manage/bodyfile.py for the rules.
+    body = bodyfile.read_body_file(body_file)
     if body is None:
-        _fail_audited(
-            **fail,
-            code="bad_args",
-            message="--body-file must be a readable regular UTF-8 text file",
-            exit_code=4,
-        )
+        _fail_audited(**fail, code="bad_args", message=_BODY_FILE_MESSAGE, exit_code=4)
     not_found = False
     try:
         with imap_connect(creds, port=account.port) as mb:
@@ -583,17 +533,9 @@ def compose_cmd(
             message=f"{', '.join(missing)} is required; no draft was written",
             exit_code=4,
         )
-    body = _read_body_file(body_file, temp_only=True)
+    body = bodyfile.read_body_file(body_file)
     if body is None:
-        _fail_audited(
-            **fail,
-            code="bad_args",
-            message=(
-                "--body-file must be a regular UTF-8 text file of at most 1 MB inside the "
-                "temp directory, not reached through a symlink"
-            ),
-            exit_code=4,
-        )
+        _fail_audited(**fail, code="bad_args", message=_BODY_FILE_MESSAGE, exit_code=4)
     # The message is built before the mailbox is touched: a refused address or an
     # over-long recipient list costs no IMAP call. ComposeError names the rule only.
     try:

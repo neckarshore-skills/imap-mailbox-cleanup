@@ -193,7 +193,7 @@ def test_no_drafts_folder_stops_and_appends_nothing(monkeypatch):
         "=?utf-8?q?a=0D=0ABcc:_evil=40x.org?=@example.org",
         "group:b@example.org;",
         "a(b@example.org",
-        '"a, b" <evil@x.org>, c@example.org',
+        '"a, b" <evil@example.net>, c@example.org',
     ],
 )
 def test_reply_never_stores_more_or_other_than_one_bare_address(sender):

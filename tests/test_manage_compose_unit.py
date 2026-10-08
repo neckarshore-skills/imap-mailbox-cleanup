@@ -145,7 +145,7 @@ def test_reply_and_new_mail_share_one_address_check():
         "a@example.org.",
         ".a@example.org",
         "a..b@example.org",
-        "a@-example.org",
+        "a@-bad.example.org",
         "a@example..org",
     ],
 )
@@ -159,7 +159,12 @@ def test_values_the_mail_library_would_reinterpret_are_refused(field, addr):
 
 @pytest.mark.parametrize(
     "addr",
-    ["alex@example.org", "a.b+tag@sub.example.org", "o'neil_1@example-host.org", "x=y@example.org"],
+    [
+        "alex@example.org",
+        "a.b+tag@sub.example.org",
+        "o'neil_1@mail-host.example.org",
+        "x=y@example.org",
+    ],
 )
 def test_ordinary_addresses_are_accepted_and_stored_as_typed(addr):
     msg = _new(to=[addr], cc=["sam@example.org"])
